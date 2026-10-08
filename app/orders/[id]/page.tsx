@@ -5,6 +5,7 @@ import { db } from '../../../lib/db.ts'
 import { fmtDateTime, fmtDateTimeTz, money } from '../../../lib/format.ts'
 import { getOrder, heldByBuyer } from '../../../lib/orders.ts'
 import { CLAIM_REASONS } from '../../../lib/protection.ts'
+import { ticketState } from '../../../lib/ticketstate.ts'
 import { getViewer } from '../../../lib/session.ts'
 import { fileClaim, requestRefund, resendConfirmation } from '../actions.ts'
 
@@ -57,13 +58,13 @@ export default async function Order({ params, searchParams }: { params: Promise<
         <ul>
           {items.map((i) => (
             <li key={i.ticket_id}>
-              {i.row ? `Section ${i.section} Row ${i.row} Seat ${i.number}` : `General admission ${i.section}`} · {money(i.unit_cents)} + {money(i.fee_cents)} fees + {money(i.tax_cents)} tax · {i.status}
+              {i.row ? `Section ${i.section} Row ${i.row} Seat ${i.number}` : `General admission ${i.section}`} · {money(i.unit_cents)} + {money(i.fee_cents)} fees + {money(i.tax_cents)} tax · <span className="badge">{ticketState(i.status, o!.status, o!.starts_at)}</span>
               {i.refunded_cents > 0 && ` · refunded ${money(i.refunded_cents)}`}{' '}
               <Link href={`/tickets/${i.ticket_id}${suffix}`}>View ticket</Link>
             </li>
           ))}
           {addons.map((a) => <li key={a.name}>{a.n} × {a.name} · {money(a.total)}</li>)}
-          {passes.map((p) => <li key={p.id}>{p.name} pass · {p.status} <Link href={`/tickets/${p.id}${suffix}`}>View pass</Link></li>)}
+          {passes.map((p) => <li key={p.id}>{p.name} pass · <span className="badge">{ticketState(p.status, o!.status, o!.starts_at)}</span> <Link href={`/tickets/${p.id}${suffix}`}>View pass</Link></li>)}
           {orderFee > 0 && <li>Order processing and delivery fees · {money(orderFee)}</li>}
         </ul>
         <table>

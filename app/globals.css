@@ -79,3 +79,13 @@ details.info { background:var(--panel); border-radius:8px; padding:.5rem 1rem; m
 .chartprev { max-width:420px; width:100%; background:#0b0c1a; border-radius:8px }
 .unread { font-weight:700; border-left:3px solid var(--accent) }
 nav.hdr-links { display:flex; gap:.75rem; align-items:center }
+
+/* SafeTix: moving band proves the code is live (a screenshot does not move); blur when the window is not in front */
+.qr { position:relative; width:240px; height:240px; overflow:hidden; border-radius:6px; background:#fff }
+.qr img { display:block; transition:filter .15s }
+.qr-hidden img { filter:blur(18px) }
+.qr-band { position:absolute; left:0; right:0; height:40px; top:0; background:linear-gradient(to bottom, transparent, rgba(99,102,241,.45), transparent); animation:qr-sweep 2s linear infinite; pointer-events:none }
+@keyframes qr-sweep { from { transform:translateY(-40px) } to { transform:translateY(240px) } }
+@media (prefers-reduced-motion: reduce) { .qr-band { animation:none; opacity:.4; top:100px } }
+.imp-banner { background:#b45309; color:#fff; padding:.5rem 1rem; display:flex; gap:1rem; align-items:center; flex-wrap:wrap }
+.imp-banner button { margin:0 }

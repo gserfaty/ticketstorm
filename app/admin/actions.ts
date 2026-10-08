@@ -8,6 +8,8 @@ import { refundEvent, refundOrder, sendConfirmation } from '../../lib/orders.ts'
 import { decideClaim } from '../../lib/protection.ts'
 import { audit, setFlag, UserError } from '../../lib/platform.ts'
 import { setCityTax, setFeeDefaults } from '../../lib/pricing.ts'
+import { setResaleDefaults } from '../../lib/rules.ts'
+import { decidePayout } from '../../lib/payouts.ts'
 import { requireAdmin } from '../../lib/session.ts'
 
 const text = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
@@ -87,6 +89,18 @@ export async function saveFeeDefaults(f: FormData) {
     throw e
   }
   done('/admin/fees', 'Fee defaults saved')
+}
+
+export async function saveResaleDefaultsAction(f: FormData) {
+  const admin = await requireAdmin()
+  try {
+    const r = setResaleDefaults({ enabled: f.get('enabled'), min_pct: f.get('min_pct'), max_pct: f.get('max_pct'), seller_fee_pct: f.get('seller_fee_pct'), buyer_fee_pct: f.get('buyer_fee_pct') })
+    audit(admin.id, 'resale.defaults', 'settings:resale_defaults', r)
+  } catch (e) {
+    if (e instanceof UserError) refuse('/admin/fees', e.message)
+    throw e
+  }
+  done('/admin/fees', 'Resale defaults saved')
 }
 
 export async function saveCityTax(f: FormData) {
@@ -185,4 +199,15 @@ export async function adminOrderRelease(f: FormData) {
     if (!approveReview(id)) throw new UserError('That order is not in review')
     audit(admin.id, 'order.release', `order:${id}`)
   }, 'Released')
+}
+
+// Payouts (users and orgs): mark paid or reject (funds return to the account).
+export async function payoutDecision(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'payoutId')
+  const paid = text(f, 'decision') === 'paid'
+  run('/admin/payouts', () => {
+    decidePayout(id, admin.id, paid)
+    audit(admin.id, paid ? 'payout.paid' : 'payout.reject', `payout:${id}`)
+  }, paid ? 'Marked paid' : 'Rejected: the funds are back in the balance')
 }

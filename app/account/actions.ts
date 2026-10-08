@@ -5,14 +5,15 @@ import { redirect } from 'next/navigation'
 import { deleteAccount, deleteCard, saveAlertArea, savePrefs, updateProfile } from '../../lib/account.ts'
 import { allowed, clientIp } from '../../lib/defense.ts'
 import { UserError } from '../../lib/platform.ts'
-import { logout, requireUser } from '../../lib/session.ts'
+import { requestPayout } from '../../lib/payouts.ts'
+import { logout, requireSelf } from '../../lib/session.ts'
 import { setTwofa } from '../../lib/twofa.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 
 // Run `fn` for the logged-in user, then go back to `page` with a notice (or the UserError message).
 async function run(page: string, fn: (userId: number) => void, ok: string, needsPassword = false): Promise<never> {
-  const user = await requireUser()
+  const user = await requireSelf()
   // password-checking forms share one limit so they can't be used to guess the password
   if (needsPassword && !allowed('reauth', clientIp(await headers()), user.id, 5)) redirect(`/account/${page}?error=${encodeURIComponent('Too many attempts, wait a minute')}`)
   try {
@@ -47,7 +48,7 @@ export async function toggleTwofa(f: FormData) {
 }
 
 export async function removeAccount(f: FormData) {
-  const user = await requireUser()
+  const user = await requireSelf()
   if (!allowed('reauth', clientIp(await headers()), user.id, 5)) redirect(`/account/privacy?error=${encodeURIComponent('Too many attempts, wait a minute')}`)
   try {
     deleteAccount(user.id, String(f.get('confirm') ?? ''))
@@ -57,4 +58,12 @@ export async function removeAccount(f: FormData) {
   }
   await logout()
   redirect('/')
+}
+
+// Seller payout: the amount is checked against the ledger balance inside one transaction (lib/payouts.ts).
+export async function requestPayoutAction(f: FormData) {
+  await run('payouts', (id) => {
+    const m = /^(\d{1,7})(\.\d{1,2})?$/.exec(field(f, 'amount'))
+    requestPayout(`user:${id}`, id, m ? Math.round(Number(field(f, 'amount')) * 100) : 0)
+  }, 'Payout requested. An admin will review it.')
 }

@@ -3,7 +3,7 @@
 import { redirect } from 'next/navigation'
 import { db } from '../../lib/db.ts'
 import { HoldError } from '../../lib/inventory.ts'
-import { cancelListing, createListing, holdListing } from '../../lib/resale.ts'
+import { cancelListing, createListing, holdListing, updateListing } from '../../lib/resale.ts'
 import { ensureSession, requireUser } from '../../lib/session.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
@@ -23,6 +23,17 @@ export async function sellTicket(f: FormData) {
     throw e
   }
   redirect('/listings?notice=' + encodeURIComponent('Listed for resale.'))
+}
+
+export async function editListingAction(f: FormData) {
+  const user = await requireUser()
+  try {
+    updateListing(user.id, id(f, 'listingId'), toCents(field(f, 'price')))
+  } catch (e) {
+    if (e instanceof HoldError) go('/listings', 'error', e.message)
+    throw e
+  }
+  redirect('/listings?notice=' + encodeURIComponent('Price updated.'))
 }
 
 export async function cancelListingAction(f: FormData) {

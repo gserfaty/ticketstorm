@@ -51,6 +51,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <Link href="/favorites">Favorites</Link>
                   <Link href="/sell">Sell tickets</Link>
                   <Link href="/listings">My listings</Link>
+                  <Link href="/account/payouts">Payouts</Link>
                   <Link href={isMember ? '/organizer' : '/become-organizer'}>{isMember ? 'Organizer' : 'Become an organizer'}</Link>
                   {user.role === 'admin' && <Link href="/admin">Admin</Link>}
                   <form action="/logout" method="post"><button>Log out</button></form>
@@ -61,6 +62,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <Link href="/signup">Sign up</Link>
                 </>
               )}
+              <Link href="/help">Help</Link>
               {process.env.NODE_ENV !== 'production' && <Link href="/dev/outbox">Dev outbox</Link>}
             </nav>
           </details>

@@ -9,6 +9,7 @@ import { refundEvent, sendConfirmation } from '../../lib/orders.ts'
 import { compTickets, moveSeat, ORDER_ROLES, refundFromForm } from '../../lib/orderadmin.ts'
 import * as org from '../../lib/organizer.ts'
 import { audit, UserError } from '../../lib/platform.ts'
+import { setResaleRule, setTransferRule } from '../../lib/rules.ts'
 import { requireOrgRole, requireUser } from '../../lib/session.ts'
 
 const text = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
@@ -141,6 +142,20 @@ export async function saveDynamic(f: FormData) {
 export async function saveLimits(f: FormData) {
   const e = await authEvent(f)
   run(e.back, () => { org.setLimits(e.id, f.get('order_limit'), f.get('ticket_limit')); audit(e.user.id, 'limits.set', `event:${e.id}`, { order: text(f, 'order_limit'), event: text(f, 'ticket_limit') }) })
+}
+
+export async function saveTransferRuleAction(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { setTransferRule(e.id, f.get('enabled') === 'on', text(f, 'hours')); audit(e.user.id, 'rules.transfer', `event:${e.id}`, { enabled: f.get('enabled') === 'on', hours: text(f, 'hours') }) })
+}
+
+export async function saveResaleRuleAction(f: FormData) {
+  const e = await authEvent(f)
+  const inherit = f.get('inherit') === 'on'
+  run(e.back, () => {
+    setResaleRule(e.id, { enabled: f.get('enabled'), min_pct: f.get('min_pct'), max_pct: f.get('max_pct'), seller_fee_pct: f.get('seller_fee_pct'), buyer_fee_pct: f.get('buyer_fee_pct') }, inherit)
+    audit(e.user.id, 'rules.resale', `event:${e.id}`, { inherit, min: text(f, 'min_pct'), max: text(f, 'max_pct'), seller: text(f, 'seller_fee_pct'), buyer: text(f, 'buyer_fee_pct'), enabled: f.get('enabled') === 'on' })
+  })
 }
 
 // Promo codes: org_id comes from the event row, so a manager can only create and delete codes for their own org.

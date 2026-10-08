@@ -18,6 +18,10 @@ export default async function Admin() {
         <li><Link href="/admin/claims">Protection claims</Link> ({n("SELECT count(*) AS n FROM claims WHERE status = 'submitted'")} open)</li>
         <li><Link href="/admin/orders">Orders (search, refund, void)</Link></li>
         <li><Link href="/admin/refunds">Failed refunds</Link> ({n('SELECT count(*) AS n FROM orders WHERE refund_error IS NOT NULL')})</li>
+        <li><Link href="/admin/payouts">Payouts</Link> ({n("SELECT count(*) AS n FROM payouts WHERE status = 'requested'")} requested)</li>
+        <li><Link href="/admin/fraud">Fraud and bots</Link></li>
+        <li><Link href="/admin/support">Support tickets</Link> ({n("SELECT count(*) AS n FROM support_tickets WHERE status = 'open'")} open)</li>
+        <li><Link href="/admin/audit">Audit log</Link></li>
         <li><Link href="/admin/fees">Fee defaults</Link></li>
         <li><Link href="/admin/taxes">City taxes</Link></li>
         <li><Link href="/admin/flags">Feature flags</Link></li>

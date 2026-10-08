@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { db, tx } from './db.ts'
 import { randomToken } from './auth.ts'
 import type { Viewer } from './orders.ts'
+import { endSession, startSession } from './impersonation.ts'
 
 export const COOKIE = 'ticketstorm_session'
 const DAYS = 30
@@ -38,8 +39,8 @@ function createSession(userId: number | null): string {
 export async function getSession() {
   const token = (await cookies()).get(COOKIE)?.value
   if (!token) return undefined
-  return db.prepare('SELECT token, user_id FROM sessions WHERE token = ? AND expires_at > ?').get(token, new Date().toISOString()) as
-    | { token: string; user_id: number | null }
+  return db.prepare('SELECT token, user_id, impersonator_id FROM sessions WHERE token = ? AND expires_at > ?').get(token, new Date().toISOString()) as
+    | { token: string; user_id: number | null; impersonator_id: number | null }
     | undefined
 }
 
@@ -72,8 +73,15 @@ export async function requireUser(): Promise<User> {
   return u
 }
 
-export async function requireAdmin(): Promise<User> {
+// Logged in as yourself. While an admin impersonates a user, security, payment and payout changes are refused (they redirect with a message).
+export async function requireSelf(): Promise<User> {
   const u = await requireUser()
+  if ((await getSession())?.impersonator_id) redirect(`/?error=${encodeURIComponent('Not available while viewing as another user')}`)
+  return u
+}
+
+export async function requireAdmin(): Promise<User> {
+  const u = await requireSelf() // an impersonating admin is the target user, not an admin: admin actions are refused
   if (u.role !== 'admin') redirect('/')
   return u
 }
@@ -84,7 +92,7 @@ export function memberRole(userId: number, orgId: number): string | undefined {
 
 // Always pass the org that OWNS the resource (event.org_id, venue.org_id), never one taken from the URL alone.
 export async function requireOrgRole(orgId: number, roles: string[]) {
-  const u = await requireUser()
+  const u = await requireSelf() // organizer mutations are refused while impersonating
   const role = memberRole(u.id, orgId)
   if (!role || !roles.includes(role)) redirect('/')
   return { user: u, role }
@@ -112,8 +120,23 @@ export async function allInOn(): Promise<boolean> {
   return (await cookies()).get('allin')?.value === '1'
 }
 
-export async function logout() {
+export async function startImpersonation(adminId: number, targetId: number) {
+  const token = startSession(adminId, targetId)
+  await logout(false)
+  await setCookie(token)
+}
+
+// Stop: audit, drop the impersonation session, sign the admin back in.
+export async function stopImpersonation() {
   const token = (await cookies()).get(COOKIE)?.value
+  const admin = token ? endSession(token) : undefined
+  ;(await cookies()).delete(COOKIE)
+  if (admin) await setCookie(createSession(admin))
+}
+
+export async function logout(auditStop = true) {
+  const token = (await cookies()).get(COOKIE)?.value
+  if (token && auditStop) endSession(token) // audits when it was an impersonation session
   if (token) db.prepare('DELETE FROM sessions WHERE token = ?').run(token)
   ;(await cookies()).delete(COOKIE)
 }

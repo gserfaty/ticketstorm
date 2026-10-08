@@ -5,7 +5,8 @@ import { CATEGORIES, eventInfo } from '../../../../../lib/events.ts'
 import { fmtDateTimeTz, toLocalInput } from '../../../../../lib/format.ts'
 import { attendance } from '../../../../../lib/scan.ts'
 import { loadEvent } from '../../../guard.ts'
-import { cancelEvent, changeDate, publish, saveEvent, saveInfo } from '../../../actions.ts'
+import { resaleRule, transferRule } from '../../../../../lib/rules.ts'
+import { cancelEvent, changeDate, publish, saveEvent, saveInfo, saveResaleRuleAction, saveTransferRuleAction } from '../../../actions.ts'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,6 +22,8 @@ export default async function ManageEvent({ params, searchParams }: { params: Pr
     .prepare("SELECT count(*) AS orders, coalesce(sum(total), 0) AS gross, coalesce(sum(refund_error IS NOT NULL), 0) AS failed FROM orders WHERE event_id = ? AND status IN ('paid','review','refunded','cancelled')")
     .get(e.id) as { orders: number; gross: number; failed: number }
   const att = attendance(e.id)
+  const tr = transferRule(e.id)
+  const rr = resaleRule(e.id)
   const hidden = <input type="hidden" name="eventId" value={e.id} />
   return (
     <>
@@ -28,7 +31,7 @@ export default async function ManageEvent({ params, searchParams }: { params: Pr
       <Flash {...(await searchParams)} />
       <p>{e.venue} · {fmtDateTimeTz(e.starts_at, e.tz)}{!draft && !e.approved && <> · <strong>awaiting admin approval</strong></>}</p>
       <p>
-        <Link href={`${base}/pricing`}>Pricing and on-sale</Link> · <Link href={`${base}/inventory`}>Inventory</Link> · <Link href={`${base}/orders`}>Orders</Link> · <Link href={`${base}/access`}>Presales</Link> · <Link href={`${base}/queue`}>Waiting room</Link> · <Link href={`/scan/${e.id}`}>Scanner</Link> · <Link href={`/events/${e.slug}`}>Public page</Link>
+        <Link href={`${base}/pricing`}>Pricing and on-sale</Link> · <Link href={`${base}/inventory`}>Inventory</Link> · <Link href={`${base}/orders`}>Orders</Link> · <Link href={`${base}/reports`}>Reports</Link> · <Link href={`${base}/marketing`}>Marketing</Link> · <Link href={`${base}/access`}>Presales</Link> · <Link href={`${base}/queue`}>Waiting room</Link> · <Link href={`/scan/${e.id}`}>Scanner</Link> · <Link href={`/events/${e.slug}`}>Public page</Link>
       </p>
       <p className="muted">{stats.orders} orders · attendance {att.scanned}/{att.total}{stats.failed > 0 && ` · ${stats.failed} refund(s) failed (admin notified)`}</p>
 
@@ -55,6 +58,24 @@ export default async function ManageEvent({ params, searchParams }: { params: Pr
         <textarea name="notices" defaultValue={info.notices ?? ''} rows={2} maxLength={500} placeholder="Notice banner (parking, gate changes...)" />
         <textarea name="setTimes" defaultValue={(info.set_times ?? []).map((t) => `${t.time} ${t.act}`).join('\n')} rows={3} placeholder={'One per line, venue time: 20:30 Headliner'} />
         <button>Save details</button>
+      </form>
+
+      <h2>Transfer and resale rules</h2>
+      <form action={saveTransferRuleAction} className="stack">
+        {hidden}
+        <label><input type="checkbox" name="enabled" defaultChecked={tr.enabled} /> Allow ticket transfers</label>
+        <label>Transfers close (hours before the show, blank = until the show) <input name="hours" type="number" min="1" defaultValue={tr.deadline_hours ?? ''} /></label>
+        <button>Save transfer rule</button>
+      </form>
+      <form action={saveResaleRuleAction} className="stack">
+        {hidden}
+        <label><input type="checkbox" name="enabled" defaultChecked={rr.enabled} /> Allow resale</label>
+        <label>Floor % of face value <input name="min_pct" type="number" min="0" max="1000" defaultValue={rr.min_pct} /></label>
+        <label>Ceiling % of face value <input name="max_pct" type="number" min="1" max="1000" defaultValue={rr.max_pct} /></label>
+        <label>Seller fee % <input name="seller_fee_pct" type="number" min="0" max="50" defaultValue={rr.seller_fee_pct} /></label>
+        <label>Buyer fee % <input name="buyer_fee_pct" type="number" min="0" max="50" defaultValue={rr.buyer_fee_pct} /></label>
+        <label><input type="checkbox" name="inherit" /> Use the platform defaults instead</label>
+        <button>Save resale rule</button>
       </form>
 
       {draft && (

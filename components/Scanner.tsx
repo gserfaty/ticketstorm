@@ -84,6 +84,18 @@ export default function Scanner({ eventId, initial }: { eventId: number; initial
     return () => { clearInterval(t); window.removeEventListener('online', flush) }
   }, [flush, refresh])
 
+  // Tap-to-enter demo: a fan's phone offers its token over a BroadcastChannel (same browser) and THIS authorised scanner submits it.
+  const nfcRef = useRef(submit)
+  nfcRef.current = submit
+  useEffect(() => {
+    let ch: BroadcastChannel | undefined
+    try {
+      ch = new BroadcastChannel('ticketstorm-nfc')
+      ch.onmessage = (e) => { if (typeof e.data?.token === 'string') nfcRef.current(e.data.token) }
+    } catch {}
+    return () => ch?.close()
+  }, [])
+
   // Camera scanning where BarcodeDetector exists; the paste field always works.
   useEffect(() => {
     if (!cam) return
