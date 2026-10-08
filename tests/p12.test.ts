@@ -84,3 +84,26 @@ test('related events share a category and genre or artist, never the event itsel
   assert.ok(b)
   assert.ok(topPicks().length > 0)
 })
+
+test('SSE frames are the compact availability only: no hold ids, sessions or owners', async () => {
+  const { snapshot, acquire, release, streamCount, MAX_STREAMS } = await import('../lib/stream.ts')
+  const ev = mkEvent('sse')
+  const held = inv.holdBestAvailable(ev, { sessionToken: 'secret-session-token', userId: run("INSERT INTO users (email, name) VALUES ('sse@x.test','sse')") }, 2)
+  const raw = snapshot(ev, [])
+  const data = JSON.parse(raw) as { seats: unknown[][]; ga: unknown[] }
+  assert.deepEqual(Object.keys(data).sort(), ['ga', 'seats'])
+  assert.ok(data.seats.every((s) => s.length === 3 && typeof s[0] === 'number' && typeof s[1] === 'string' && typeof s[2] === 'number'))
+  assert.equal(data.seats.filter((s) => s[1] === 'h').length, 2)
+  assert.ok(!/hold|session|secret|user|expires/i.test(raw))
+  assert.ok(held.holdId > 0)
+  // the cap: MAX_STREAMS connections, then refusal until one closes
+  const before = streamCount()
+  let n = 0
+  while (acquire()) n++
+  assert.equal(n, MAX_STREAMS - before)
+  assert.equal(acquire(), false)
+  release()
+  assert.equal(acquire(), true)
+  for (let i = 0; i < MAX_STREAMS; i++) release()
+  assert.equal(streamCount(), 0)
+})

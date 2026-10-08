@@ -60,7 +60,7 @@ export default async function Tickets({ params, searchParams }: { params: Promis
   const seats = (
     db
       .prepare(
-        `SELECT i.id, i.section_id, st.row, st.number, st.x, st.y, st.accessible + 2 * st.companion AS flags
+        `SELECT i.id, i.section_id, st.row, st.number, st.x, st.y, st.accessible + 2 * st.companion + 4 * st.obstructed AS flags
          FROM inventory i JOIN seats st ON st.id = i.seat_id WHERE i.event_id = ? ORDER BY i.section_id, st.row, st.number`,
       )
       .all(e!.id) as { id: number; section_id: number; row: string; number: number; x: number; y: number; flags: number }[]

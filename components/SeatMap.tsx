@@ -2,11 +2,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as RKeyboardEvent, PointerEvent as RPointerEvent } from 'react'
 import Countdown from './Countdown.tsx'
+import SeatView from './SeatView.tsx'
 
 export type MapSection = { id: number; name: string; kind: 'reserved' | 'ga'; path: string; lx: number; ly: number; rank: number }
 // cents = the price to display (already all-in when the fan chose all-in pricing)
 export type MapLevel = { id: number; name: string; color: string | null; cents: number; type: string; perks: string | null }
-// [inventory id, section id, row, number, x, y, flags] flags: 1 accessible, 2 companion
+// [inventory id, section id, row, number, x, y, flags] flags: 1 accessible, 2 companion, 4 limited view (obstructed)
 export type MapSeat = [number, number, string, number, number, number, number]
 export type Avail = { seats: (readonly [number, string, number])[]; ga: { sectionId: number; levelId: number; total: number; free: number }[] }
 export type Hold = { id: number; expiresAt: string; seatIds: number[]; ga: { sectionId: number; qty: number } | null }
@@ -58,6 +59,7 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
   const [msg, setMsg] = useState<{ error: boolean; text: string } | null>(null)
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [view, setView] = useState<number | null>(null) // seat shown in the "view from seat" panel
   const svg = useRef<SVGSVGElement>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const drag = useRef<{ cx: number; cy: number; vb: VB; moved: boolean } | null>(null)
@@ -109,10 +111,21 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
     if (r?.ok) setAvail(await r.json())
   }, [eventId])
 
+  // live updates over SSE (/api/events/[id]/stream); when it is unavailable (no EventSource, 503 over the cap, a dropped connection) poll every 5s
+  const [live, setLive] = useState(false)
   useEffect(() => {
-    const t = setInterval(refresh, 5000)
-    return () => clearInterval(t)
-  }, [refresh])
+    let t: ReturnType<typeof setInterval> | undefined
+    const stopPolling = () => { clearInterval(t); t = undefined }
+    const poll = () => { t ??= setInterval(refresh, 5000) }
+    if (typeof EventSource === 'undefined') {
+      poll()
+      return stopPolling
+    }
+    const es = new EventSource(`/api/events/${eventId}/stream`)
+    es.onmessage = (m) => { stopPolling(); setLive(true); setAvail(JSON.parse(m.data)) }
+    es.onerror = () => { setLive(false); poll() } // the browser keeps retrying; polling covers the gap (and a permanent 503)
+    return () => { es.close(); stopPolling() }
+  }, [refresh, eventId])
   // someone else grabbed a selected seat -> drop it
   useEffect(() => setSelected((sel) => (sel.every((id) => status.get(id)?.[1] === 'a') ? sel : sel.filter((id) => status.get(id)?.[1] === 'a'))), [status])
 
@@ -197,8 +210,8 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
     refresh()
   }
 
-  const dimmed = (id: number, flags: number) => (adaOnly && !flags) || price(id) > maxPrice
-  const visible = (s: MapSeat) => s[1] === open || (adaOnly && s[6] > 0)
+  const dimmed = (id: number, flags: number) => (adaOnly && !(flags & 3)) || price(id) > maxPrice
+  const visible = (s: MapSeat) => s[1] === open || (adaOnly && (s[6] & 3) > 0)
   const cur = open ? sectionById.get(open) : undefined
   const curGa = cur?.kind === 'ga' ? gaById.get(cur.id) : undefined
   const minC = Math.min(...levels.map((l) => l.cents))
@@ -245,7 +258,7 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
           {sections.map((s) => {
             const g = gaById.get(s.id)
             const ss = bySection.get(s.id) ?? []
-            const rep = ss.find((x) => !x[6]) ?? ss[0]
+            const rep = ss.find((x) => !(x[6] & 3)) ?? ss[0]
             const lv = levelById.get(g ? g.levelId : (status.get(rep?.[0])?.[2] ?? 0))
             const free = g ? g.free : ss.filter((x) => status.get(x[0])?.[1] === 'a').length
             const off = free === 0 || (lv?.cents ?? 0) > maxPrice
@@ -266,9 +279,9 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
             const dim = dimmed(id, flags)
             const can = state === 'a' && !dim && !hold
             return (
-              <g key={id} opacity={dim ? 0.2 : 1} className={`seat st-${state} ${flags ? 'ada' : ''}`} onClick={() => can || state === 'sel' ? clickSeat(id) : undefined} {...key(() => can || state === 'sel' ? clickSeat(id) : undefined)}
-                aria-label={`${seatLabel(s)}, ${state === 'r' ? '' : usd(price(id)) + ', '}${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', r: 'verified resale', sel: 'selected', mine: 'yours' }[state]}`}
-                onPointerMove={(e) => showTip(e, `${seatLabel(s)}${state === 'r' ? '' : ' · ' + usd(price(id))}${flags & 1 ? ' · ♿ accessible' : flags & 2 ? ' · companion' : ''} · ${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', r: 'verified resale', sel: 'selected', mine: 'yours' }[state]}`)} onPointerLeave={() => setTip(null)}>
+              <g key={id} opacity={dim ? 0.2 : 1} className={`seat st-${state} ${flags & 3 ? 'ada' : ''} ${flags & 4 ? 'ltd' : ''}`} onClick={() => can || state === 'sel' ? clickSeat(id) : undefined} {...key(() => can || state === 'sel' ? clickSeat(id) : undefined)}
+                onFocus={() => setView(id)} aria-label={`${seatLabel(s)}${flags & 4 ? ', limited view' : ''}, ${state === 'r' ? '' : usd(price(id)) + ', '}${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', r: 'verified resale', sel: 'selected', mine: 'yours' }[state]}`}
+                onPointerMove={(e) => { setView(id); showTip(e, `${seatLabel(s)}${state === 'r' ? '' : ' · ' + usd(price(id))}${flags & 1 ? ' · ♿ accessible' : flags & 2 ? ' · companion' : ''}${flags & 4 ? ' · limited view' : ''} · ${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', r: 'verified resale', sel: 'selected', mine: 'yours' }[state]}`) }} onPointerLeave={() => setTip(null)}>
                 <circle cx={x} cy={y} r={r} fill={state === 'a' ? (levelById.get(st?.[2] ?? 0)?.color ?? '#3b82f6') : undefined} />
                 {(flags & 1) > 0 && <text x={x} y={y} fontSize={r * 1.5} textAnchor="middle" dominantBaseline="central" pointerEvents="none">♿</text>}
               </g>
@@ -296,9 +309,17 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
           ))}
           {list.length === 0 && <li className="muted">Nothing in this price range.</li>}
         </ul>
+        {view !== null && seatById.get(view) && (
+          <>
+            <h3>View from seat</h3>
+            <SeatView x={seatById.get(view)![4]} y={seatById.get(view)![5]} obstructed={(seatById.get(view)![6] & 4) > 0} label={seatLabel(seatById.get(view)!)} />
+            <p className="muted">{seatLabel(seatById.get(view)!)}</p>
+          </>
+        )}
       </aside>
       </div>
 
+      <p className="muted">{live ? 'Live seat updates on.' : 'Seat updates refresh every few seconds.'} Hover or focus a seat to preview the view.</p>
       <ul className="legend">
         {levels.map((l) => <li key={l.id} title={l.perks ?? undefined}><i style={{ background: l.color ?? '#3b82f6' }} /> {l.name} {usd(l.cents)}</li>)}
         <li><i className="st-sel" /> Selected</li>
@@ -307,6 +328,7 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
         <li><i className="st-s" /> Sold</li>
         <li><i className="st-b" /> Unavailable</li>
         <li>♿ Accessible</li>
+        <li><i className="ltd" /> Limited view (pillar or rail)</li>
         <li className="muted">{allIn ? 'Prices include fees and tax' : 'Prices before fees and tax'}</li>
         <li><i className="st-r" /> Verified Resale (buy below the map)</li>
       </ul>

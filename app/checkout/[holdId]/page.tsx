@@ -38,6 +38,9 @@ export default async function Checkout({ params, searchParams }: { params: Promi
   const user = await getUser()
   const face = q.lines.reduce((n, l) => n + (l.eventId === hold.event_id ? l.unit : 0), 0)
   const premium = resale ? 0 : Math.round(((face - q.discount) * protectionPct()) / 100)
+  const limited = db
+    .prepare('SELECT s.name AS section, st.row, st.number FROM inventory i JOIN seats st ON st.id = i.seat_id JOIN sections s ON s.id = i.section_id WHERE i.hold_id = ? AND st.obstructed = 1 ORDER BY i.id')
+    .all(hold.id) as { section: string; row: string; number: number }[]
   const parts = user ? plan(q.total, ev.starts_at) : null // pay in 4 is for accounts only
   return (
     <>
@@ -63,6 +66,9 @@ export default async function Checkout({ params, searchParams }: { params: Promi
           </tbody>
         </table>
       </div>
+      {limited.length > 0 && (
+        <p className="notice-banner card" role="note"><strong>Limited view:</strong> {limited.map((l) => `Section ${l.section} Row ${l.row} Seat ${l.number}`).join(', ')} {limited.length === 1 ? 'has' : 'have'} a pillar or rail in the sightline. Check the view from the seat on the seat map before you pay.</p>
+      )}
       {!resale && (
         <form action={applyOptions} className="card stack">
           <input type="hidden" name="holdId" value={hold.id} />

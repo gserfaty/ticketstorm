@@ -89,3 +89,8 @@ nav.hdr-links { display:flex; gap:.75rem; align-items:center }
 @media (prefers-reduced-motion: reduce) { .qr-band { animation:none; opacity:.4; top:100px } }
 .imp-banner { background:#b45309; color:#fff; padding:.5rem 1rem; display:flex; gap:1rem; align-items:center; flex-wrap:wrap }
 .imp-banner button { margin:0 }
+
+/* P12A */
+.seat.ltd circle, .legend i.ltd { stroke:#fb923c; stroke-width:1.5; stroke-dasharray:2 1 }
+.legend i.ltd { background:transparent; border:2px dashed #fb923c }
+.listview h3 { margin:.75rem 0 .25rem; font-size:.95rem }
