@@ -8,6 +8,10 @@ import { priceBounds } from '../../../lib/resale.ts'
 import { transferCloses, transferRule } from '../../../lib/rules.ts'
 import { ticketState } from '../../../lib/ticketstate.ts'
 import TicketQR from '../../../components/TicketQR.tsx'
+import OfflineTickets from '../../../components/OfflineTickets.tsx'
+import Until from '../../../components/Until.tsx'
+import ShareButton from '../../../components/ShareButton.tsx'
+import { partyToken } from '../../../lib/party.ts'
 import { cancelListingAction, editListingAction, sellTicket } from '../../resale/actions.ts'
 import { cancelTransferAction, sendTransfer } from '../../transfers/actions.ts'
 
@@ -39,10 +43,15 @@ export default async function Ticket({ params, searchParams }: { params: Promise
       {notice && <p className="notice">{notice}</p>}
       <p>{t!.venue} · {fmtDateTimeTz(t!.starts_at, t!.tz)}</p>
       <p>{t!.addon ? `${t!.addon} pass` : t!.row ? `Section ${t!.section} Row ${t!.row} Seat ${t!.number}` : `General admission ${t!.section}`} · <span className="badge">{ticketState(t!.status, t!.order_status, t!.starts_at, !!pending)}</span></p>
+      {mine && t!.status === 'valid' && t!.order_status !== 'review' && <OfflineTickets userId={user!.id} />}
+      {mine && ev.event_id && t!.starts_at > now && (
+        <p className="muted">Share where your group sits (no ticket codes are shown): <a href={`/party/${partyToken(user!.id, ev.event_id, t!.starts_at)}`}>party link</a> <ShareButton title={`My seats for ${t!.title}`} path={`/party/${partyToken(user!.id, ev.event_id, t!.starts_at)}`} /></p>
+      )}
       {mine && <p className="muted"><a href={`/api/tickets/${id}/pass?wallet=apple`}>Add to Apple Wallet</a> · <a href={`/api/tickets/${id}/pass?wallet=google`}>Add to Google Wallet</a> (simulated passes)</p>}
       {delivery.delivery === 'willcall' && <p className="notice">Will-call: {delivery.picked_up_at ? `picked up at the box office on ${fmtDateTimeTz(delivery.picked_up_at, t!.tz)}.` : `pick up your tickets at the box office with photo ID and order #${t!.order_id}. The mobile code below works too.`}</p>}
       {mine && t!.status === 'valid' && t!.order_status !== 'review' && (flags?.print_ok ? <p><Link href={`/tickets/${id}/print`}>Print this ticket</Link> <span className="muted">(static barcode, first scan wins)</span></p> : <p className="muted">Mobile tickets only for this event: printouts are not accepted.</p>)}
       {t!.order_status === 'review' && <p className="notice">This order is under review. The ticket cannot be scanned or transferred until it is approved.</p>}
+      {t!.starts_at > now && <p><Until iso={t!.starts_at} label="Show starts in" /></p>}
       {t!.status === 'valid' && t!.order_status !== 'review' ? <TicketQR ticketId={t!.id} secret={t!.secret} /> : t!.status !== 'valid' && <p>This ticket is {t!.status} and cannot be scanned.</p>}
       {open && t!.status === 'valid' && ['paid', 'partially_refunded'].includes(t!.order_status) && !t!.addon && <p><Link href={`/tickets/${id}/exchange`}>Exchange for another date</Link></p>}
       {open && t!.status === 'valid' && pending && (

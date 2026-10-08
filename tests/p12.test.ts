@@ -318,3 +318,25 @@ test('wallet: cards are validated, fingerprinted, capped; one default', () => {
   assert.deepEqual((db.prepare('SELECT is_default FROM saved_cards WHERE user_id = ? ORDER BY id').all(u) as { is_default: number }[]).map((c) => c.is_default), [1, 0])
   assert.throws(() => setDefaultCard(user('wallet-other'), cards[0].id), /not found/)
 })
+
+// ---- party link ----
+const { partyToken, verifyParty, partyView } = await import('../lib/party.ts')
+
+test('party link: signed, tamper-proof, expires, and shows seats without ever exposing the ticket secret', () => {
+  const ev = mkEvent('party')
+  const host = run("INSERT INTO users (email, name) VALUES ('host@x.test', 'Hannah Host')")
+  const { tickets } = buy(host, ev, { qty: 2 })
+  const starts = get<{ starts_at: string }>('SELECT starts_at FROM events WHERE id = ?', ev).starts_at
+  const tok = partyToken(host, ev, starts)
+  assert.deepEqual(verifyParty(tok), { userId: host, eventId: ev })
+  const [u, e, exp, sig] = tok.split('.')
+  for (const bad of [`${Number(u) + 1}.${e}.${exp}.${sig}`, `${u}.${Number(e) + 1}.${exp}.${sig}`, `${u}.${e}.${Number(exp) + 1}.${sig}`, `${u}.${e}.${exp}.${sig.replace(/^./, sig[0] === 'a' ? 'b' : 'a')}`, `${u}.${e}.${exp}`, '', 'x.y.z.w', tok + '0'])
+    assert.equal(verifyParty(bad), undefined, bad)
+  assert.equal(verifyParty(tok, Number(exp) + 1), undefined) // expired
+  const view = partyView(host, ev)!
+  assert.equal(view.host, 'Hannah')
+  assert.equal(view.seats.length, 2)
+  const json = JSON.stringify(view)
+  for (const t of tickets) assert.ok(!json.includes(get<{ secret: string }>('SELECT secret FROM tickets WHERE id = ?', t).secret))
+  assert.ok(!/@|secret|token/i.test(json))
+})
