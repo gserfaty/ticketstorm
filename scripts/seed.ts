@@ -7,6 +7,10 @@ import { addWindow, assignWindow } from '../lib/access.ts'
 import { joinQueue } from '../lib/queue.ts'
 import { finalize } from '../lib/orders.ts'
 import { createListing } from '../lib/resale.ts'
+import { settleEvent } from '../lib/reports.ts'
+import { addMessage, createContact } from '../lib/support.ts'
+import { scanTicket } from '../lib/scan.ts'
+import { makeToken } from '../lib/safetix.ts'
 import { toggleFavorite } from '../lib/favorites.ts'
 import { localToUtc, slugify } from '../lib/format.ts'
 import type { VenueKind } from '../lib/venue-gen.ts'
@@ -409,6 +413,46 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   toggleFavorite(fan, 'artist', id('artists', 'slug', 'cora-valdez')) // her New York date is a draft: publish it as organizer@
   toggleFavorite(fan, 'event', id('events', 'slug', 'neon-harbor-empire-saturday')) // price-drop watch: lower a level in the organizer's pricing
   toggleFavorite(fan, 'event', id('events', 'slug', 'neon-harbor-empire-onsale-soon')) // on-sale reminder
+}
+
+// P11: an event with a transfer deadline and resale rules, a settled past event, and a support ticket with a staff reply.
+{
+  const org = (db.prepare("SELECT id FROM orgs WHERE name = 'Storm Live'").get() as { id: number }).id
+  const venue = db.prepare("SELECT id FROM venues WHERE slug = 'empire-arena'").get() as { id: number }
+  const user = (email: string) => db.prepare('SELECT id, email FROM users WHERE email = ?').get(email) as { id: number; email: string }
+  const mk = (slug: string, title: string, startsAt: string, extra: Record<string, string | null> = {}) => {
+    const id = Number(
+      db.prepare("INSERT INTO events (org_id, venue_id, slug, title, category, genre, starts_at, doors_at, description, info, status, onsale_at, popularity, transfer_rule, resale_rule) VALUES (?,?,?,?,'music','Pop',?,?,?,?,'published',?,50,?,?)")
+        .run(org, venue.id, slug, title, startsAt, startsAt, `${title}.`, json({ age: 'All ages', bag: 'Clear bags only', notices: '', set_times: [] }), new Date(Date.now() - 30 * 864e5).toISOString(), extra.transfer ?? null, extra.resale ?? null).lastInsertRowid)
+    db.prepare("INSERT INTO event_artists (event_id, artist_id, billing) SELECT ?, id, 0 FROM artists WHERE slug = 'neon-harbor'").run(id)
+    for (const [name, cents, type] of [['General', 6000, 'standard'], ['Premium', 12000, 'standard']] as const) db.prepare('INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type) VALUES (?,?,?,?,?)').run(id, name, '#3b82f6', cents, type)
+    generateInventory(id)
+    return id
+  }
+  const buy = (eventId: number, email: string, key: string, qty: number) => {
+    const u = user(email)
+    const owner = { sessionToken: `${key}-session`, userId: u.id }
+    const held = holdBestAvailable(eventId, owner, qty)
+    finalize({ holdId: held.holdId, sessionToken: owner.sessionToken, userId: u.id, email: u.email, key, method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false, billing: { name: 'Fan', address: '1 Main St', city: 'New York', zip: '10001' } })
+  }
+  // starts in 36 hours; transfers close 48 hours before the show (so they are closed already); resale between 50% and 150% of face, 10% seller fee, 5% buyer fee
+  const rules = mk('storm-rules-demo', 'Storm Rules Demo Night', new Date(Date.now() + 36 * 3_600_000).toISOString(), {
+    transfer: json({ enabled: true, deadline_hours: 48 }), resale: json({ enabled: true, min_pct: 50, max_pct: 150, seller_fee_pct: 10, buyer_fee_pct: 5 }),
+  })
+  buy(rules, 'fan@ticketstorm.test', 'seed-rules-order-1', 2)
+  // a finished show: three tickets sold (one with a tracked source), one scanned, settled into the organization's balance
+  const past = mk('storm-settled-demo', 'Storm Settled Demo (last week)', new Date(Date.now() + 2 * 864e5).toISOString())
+  buy(past, 'fan@ticketstorm.test', 'seed-settled-order-1', 2)
+  buy(past, 'fan2@ticketstorm.test', 'seed-settled-order-2', 1)
+  db.prepare("UPDATE orders SET src = 'newsletter' WHERE idempotency_key = 'seed-settled-order-1'").run()
+  const t = db.prepare("SELECT t.id, t.secret FROM tickets t JOIN orders o ON o.id = t.order_id WHERE o.idempotency_key = 'seed-settled-order-1' ORDER BY t.id").get() as { id: number; secret: string }
+  scanTicket(past, makeToken(t.id, t.secret), user('scanner@ticketstorm.test').id)
+  db.prepare('UPDATE events SET starts_at = ?, doors_at = ? WHERE id = ?').run(new Date(Date.now() - 7 * 864e5).toISOString(), new Date(Date.now() - 7 * 864e5 - 3_600_000).toISOString(), past)
+  settleEvent(past, user('organizer@ticketstorm.test').id)
+  // support
+  const fan = user('fan@ticketstorm.test')
+  const ticket = createContact(fan.id, fan.email, 'Can I change the name on my ticket?', 'I bought two tickets for the Saturday show and need one in my partner\'s name.')
+  addMessage(ticket, { staff: true, name: 'Ada Admin' }, 'Hi Frankie! Use "Transfer ticket" on the ticket page and enter your partner\'s email. They get a new ticket and the old code stops working.')
 }
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')
