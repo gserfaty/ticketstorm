@@ -1,5 +1,7 @@
 # TicketStorm Implementation Plan
 
+**Status: P1 to P12B are all implemented (see CHANGELOG.md).**
+
 Source of truth for the developer and critic agents. Feature refs (§N) point to docs/research.md.
 
 ## Stack

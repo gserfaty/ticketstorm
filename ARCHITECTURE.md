@@ -1,6 +1,6 @@
 # TicketStorm architecture
 
-Status: P1 to P11 and P12A (features 1 to 11) of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
+Status: all phases of [docs/plan.md](docs/plan.md) are done (P1 to P11, P12A features 1 to 11, P12B features 12 to 22). Statements here describe the code as it is, not the plan.
 
 ## Stack and why
 
@@ -286,6 +286,26 @@ A parking or hospitality unit is an `order_items` row of kind `addon` plus a `ti
 ### Other
 Display currency is a cookie plus a fixed table (`lib/currency.ts`); stored and charged amounts are always USD cents. The protection step stores `holds.options.protection` as `true`, `false` or absent (absent redirects checkout to `/checkout/[id]/protection`). Express checkout is a prefill of `PayForm` plus a server-required CVC for saved cards. SEO: `lib/seo.ts` builds metadata and the sitemap list. Price alerts run inside `runAlerts`, deduplicated by `alerts_sent (user, 'price_target', 'event:<id>:<target cents>')`.
 
+## P12B subsystems
+
+### Offers and reserved listings
+`resale_offers` hold the offers; the decision lives on the listing: `reserved_for / reserved_until / offer_price_cents`. `acceptOffer` is one conditional UPDATE (active, not held, not already reserved) inside `tx`, so exactly one accept wins; `IDLE` (no live hold and no live reservation) guards seller edits, cancels and expiry. `rules.listingPrice` is the single SQL expression for "what this buyer pays" (offer price only for the reserved buyer while the reservation is live); `quote` and `settleListing` both use it, so the quoted price, the order lines and the resale ledger group agree. Reservation expiry is lazy like holds.
+
+### Stored value as payment methods
+A payment row per source: the card row (possibly 0 cents) plus `giftcard` and `credit` charges created in `createOrder` by `applyStored`, whose guarded updates (`balance_cents >= x`, `INSERT ... SELECT ... WHERE sum >= x`) make overspending impossible even for two concurrent orders; a miss throws and the whole order rolls back. `planStored` is only a read-only split used by `finalize` and the pay action (to skip card validation when fully covered). Refunds go through `refundMoney`/`refund` as before; `refund()` sends stored-value charges back with the same method, and `settleStoredRefunds` (same tx) restores the credit or gift card balance and, unless `reverseAfterSettlement` will, writes the ledger pair. Ledger accounts: `credit:<user>` and `giftcard:<id>` are liabilities; issue/return = `+account, -cash`, spend = `-account, +cash`; after settlement the reversal debits organizer, platform and tax and credits the stored-value account instead of cash. Gift card codes: 16 chars from a 32-letter alphabet, keyed hash at rest (`defense.mac`), 10 lookups a minute.
+
+### Chargebacks
+`createOrder` calls `openDispute` for a 0341-card payment. `resolveDispute` (admin, audited in the action) marks it decided in a conditional UPDATE; "lost" calls `refundInTx(..., { via: 'chargeback' })`: the card part comes back as a refund payment of method `chargeback` that `refund()` never fails (the 0341 failure rule skips it), tickets are cancelled and seats released by the same code as any refund, stored-value parts return to their sources.
+
+### Organizer developer tools
+API keys are `tsk_` + 24 random bytes, stored as SHA-256 (fast hash is adequate for 192-bit random secrets); `authenticateKey` also requires an approved org; the org is taken from the key, never the request. Rate limit = `defense.hit('api:key:<id>')`. Webhooks are simulated: `emitWebhook` (inside the causing transaction) writes `outbox(channel='webhook')` rows signed with the webhook's own secret. The embed is a route handler returning inert HTML, excluded from middleware (no cookies), and the only path without `frame-ancestors 'self'` (see `next.config.ts`). Customer export is `reports.customersCsv(orgId)` behind `requireOrgRole(REPORT_ROLES)`.
+
+### Analytics, A/B, i18n
+`events_log` is append-only counters with no identity columns (a test asserts the columns). A/B: `ab.bucket(flag, visitorId)` is a pure hash; `session.abVariant` reads the `ab` cookie that `middleware.ts` sets once. i18n: `lib/i18n.ts` dictionaries, language in the `lang` cookie, checkout strings passed to the client form as props.
+
+### Accessibility notes
+Landmarks and a skip link in `layout.tsx`; focus and contrast rules at the end of `globals.css`. `SeatMap` uses roving tabindex with arrow-key navigation computed from seat coordinates (`seatKeys`), `role=button`/`aria-pressed`/`aria-label` on every seat and section, and `role=status` for messages. Not covered: automated axe-style audits, screen reader testing, SVG zoom by keyboard beyond the +/- buttons.
+
 ## Authentication and authorization
 
 - **Sessions**: random 24-byte token in an httpOnly, `sameSite=lax` cookie (`secure` in production), 30-day row in `sessions`. `ensureSession()` lazily creates a **guest session** (user_id NULL) only in server actions and route handlers that may set cookies; `getSession()` is read-only.
@@ -330,7 +350,7 @@ A seat's companion is found, not stored: the seat in the same section and row, n
 
 ## Background jobs
 
-`runJobs()` (called by `npm run jobs` and, throttled to once per 30 seconds, by the root layout): in one transaction delete expired sessions and codes, return expired held inventory to `available` and mark expired holds `released`, drop old rate-limit rows and long-expired queue entries, release ended presale windows, record `last_jobs_run`. Then run the Verified Fan lottery and waitlist promotion (each in its own transaction, each idempotent) `chargeDueInstallments()` (pay in 4: one claimed row per transaction) and `runAlerts()` (new-show, on-sale and price-drop alerts, idempotent through `alerts_sent`). Correctness never depends on jobs because expiry is lazy.
+`runJobs()` (called by `npm run jobs` and, throttled to once per 30 seconds, by the root layout): in one transaction delete expired sessions and codes, return expired held inventory to `available` and mark expired holds `released`, drop old rate-limit rows and long-expired queue entries, release ended presale windows, record `last_jobs_run`. Then run the Verified Fan lottery and waitlist promotion (each in its own transaction, each idempotent) `chargeDueInstallments()` (pay in 4: one claimed row per transaction) `runAlerts()` (new-show, on-sale and price-drop alerts, idempotent through `alerts_sent`) and `runDigest()` (weekly digest, once per user per ISO week through `alerts_sent`). Correctness never depends on jobs because expiry is lazy.
 
 ## Simulated external systems
 
@@ -365,6 +385,7 @@ Other known gaps:
 - P9 deferrals (`ponytail:` in code): a failed installment is not retried automatically; an item refund on a pay-in-4 order is capped at what was paid; exchange refuses promo, bundle and installment orders; the 2FA phone number is not verified when 2FA is turned on; wallet payments are simulated (no token); the mock IdP trusts whatever identity is typed (disabled in production).
 - Email/SMS are outbox-only. Preferences apply to optional alerts and marketing only; order, ticket, transfer and event-change messages are essential and ignore them.
 - P10: price drops compare base face price only; ICS end time is a fixed 3 hours; the venue map is a schematic SVG, not tiles; on-sale reminders depend on the jobs running in the hour before on-sale; the companion link is adjacency, so a chart where the companion is not beside the accessible seat gets no auto-hold.
+- P12B deferrals: webhooks are logged, not delivered or retried; the digest scores every user in one job run (fine for a demo, batch it for real volume); third-party resale and vendor linking remain labelled placeholders; the A/B visitor id is a cookie, so cookie-less visitors all share one bucket; stored value cannot be used with pay in 4; a gift card is not a transferable object (redeem to credit or use at checkout); only nav and checkout are translated.
 - Single process, single SQLite file; `place()` serializes all writers on the database lock.
 - Dev database is disposable: schema changes require `npm run reset`.
 - Guests are limited only per hold (the per-account limit needs a user id).

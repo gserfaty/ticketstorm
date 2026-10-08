@@ -2,6 +2,55 @@
 
 All notable changes, newest first. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no version numbers yet; each section is a commit. Review-fix commits are grouped under their phase.
 
+## P12B: nice-to-have sweep, features 12 to 22 (final phase)
+
+Verified, not rebuilt: the resale policy UI (organizer event page: floor, ceiling, fees, on/off, platform defaults at `/admin/fees`), the hearing assistance / ASL interpreter / sensory-friendly request types on `/support/ada` (`ADA_KINDS`), and artist music/social links (stored in `artists.links`, now headed "Music and social", http(s) only, `nofollow`).
+
+#### Added: resale (1/8)
+- **Make an offer.** Table `resale_offers` (pending, accepted, rejected, withdrawn, expired, completed; one pending offer per buyer and listing by a partial unique index; offers lapse after 48 h). `makeOffer` requires an offer below the asking price and at or above the event's floor. `acceptOffer` reserves the listing for that buyer at the offer price for 30 minutes (`listings.reserved_for / reserved_until / offer_price_cents`) with ONE conditional UPDATE (active, nobody checking out, nothing already reserved), so two offers can never both be accepted (tested with worker threads); other pending offers are declined. While reserved nobody else can hold it, and the seller cannot edit, cancel or expire it (`IDLE` predicate). The buyer checks out from `/seller`; `holdListing` keeps the offer price for that buyer and extends the reservation to the hold, `pricing.quote` and `settleListing` read the same price (`rules.listingPrice`), so the ledger (seller net, fees, tax) uses the offer price and stays zero-sum. A lapsed reservation returns the listing to its asking price.
+- **Price suggestion** on `/sell`: median of the other active listings in the ticket's section, else its price level, clamped to the floor and ceiling.
+- **Seller dashboard** `/seller`: offers received (accept, reject), listings, sold with net per sale, balance, offers you made (withdraw, check out). Third-party resale is labelled as not integrated (skipped) on the dashboard, `/sell` and the offer text.
+- **Claim status page** `/claims` (own claims, state and next step).
+- Server actions use `requireSelf`; offers are rate limited (10 a minute).
+
+#### Added: stored value, refunds, chargebacks (2/8)
+- **Account credit** (`credits`, signed rows; balance is the sum). Spending is one guarded `INSERT ... SELECT ... WHERE balance >= amount`, so the balance never goes negative. Shown and listed on `/account/payment`.
+- **Gift cards** (`gift_cards`): `/gift-cards` to buy (fake charge on a test card, 3DS refused), the 16-character code (80 bits, `XXXX-XXXX-XXXX-XXXX`) is emailed to the recipient and only a keyed hash is stored; check a balance (10 a minute per IP and account, same answer for wrong and empty); redeem the whole balance to account credit (guarded, single use). `balance_cents` has `CHECK >= 0`.
+- **Partial payment at checkout.** The pay form takes a gift card code and a "use my credit" box. `planStored` splits the total (gift card, then credit, then card); the card is charged only the rest (a fully covered order asks for no card). The balances are taken inside the order's transaction by guarded decrements (a miss rolls the whole order back, tested with two 3DS orders on one card), each as its own `charge` payment (`giftcard` / `credit`), so `sum(payments) == total` and `sum(items) == total` hold. Pay in 4 cannot be combined with them.
+- **Refunds return value to the source**: the shared refund function sends the gift-card part back onto the card and the credit part back to credit (`settleStoredRefunds`); the card part goes to the card as before. New option **refund as account credit** (self-service refund on a rescheduled event, organizer and admin refund forms; accounts only, not resale orders) via `RefundOpts.credit`.
+- **Ledger.** Stored value is a liability: issuing or returning it writes `account +x, cash -x`; spending it writes `account -x, cash +x` (accounts `credit:<user>`, `giftcard:<id>`); after settlement `reverseAfterSettlement` books the credit/gift account instead of cash. Every pair sums to zero (asserted in the tests).
+- **Chargebacks.** An order paid with the 0341 card opens a `disputes` row (the bank disputes it). `/admin/disputes`: **won** changes nothing; **lost** refunds the card part through the shared refund function as a `chargeback` payment that cannot fail, cancels the tickets and frees the seats; gift card and credit paid on the order return to their balances; after settlement the organizer, platform and tax accounts are reversed, zero-sum. Audited.
+
+#### Added: content (3/8)
+- **Add-on kinds**: organizers can create parking, merch, hospitality, VIP upgrade, food pre-order, camping and shuttle; VIP, camping and shuttle (like parking and hospitality) get scannable passes. All reuse `addons` and its guarded `sold` update.
+- **Reviews** (`reviews`): event or venue, 1 to 5 stars, only for users who own a ticket that was scanned (`attended`), one per user per target (UNIQUE), pending until an admin approves at `/admin/reviews` (audited), shown on the event and venue pages as "verified attendee" with escaped text.
+- **Seat views**: the venue page shows generated views from a middle seat of each reserved section (the P12A `SeatView`), labelled as illustrations.
+- **Team pages**: `artists.kind` (`artist|team`); a team page shows the schedule and season tickets (the bundle price level, same seat in every game).
+- **Weekly digest** (`lib/digest.ts`, in `runJobs`): up to 5 recommended events per user, once per user per ISO week through `alerts_sent`, sent as a marketing message so the user's marketing in-app / email / SMS preferences apply and the email has the unsubscribe footer.
+- **Import artists** (`/favorites/import`): paste names; case, punctuation, "&" and a leading "the" are ignored; reports followed, already followed and unmatched.
+
+#### Added: organizer tools and API (4/8)
+- **Clone event** and **series template** (N more draft dates every D days, shared `series_key`) on the event page; copies details, rules, levels, offers and add-ons (no sales, bundles or presale windows).
+- **API keys** (`api_keys`, `/organizer/[orgId]/developers`): `tsk_` + 192 random bits, shown once (client `useActionState`), only a SHA-256 hash stored, revocable, at most 10 active. `GET /api/v1/events` (Bearer key): 401 without a valid key, scoped to the key's org, 60 requests a minute per key (429), public event facts only. Audited create/revoke.
+- **Webhooks** (`webhooks`): `order.created` and `order.refunded` are written to the outbox `webhook` channel with `X-TicketStorm-Signature: sha256=HMAC(secret, body)` in the subject; org-scoped; payloads carry ids and amounts, no personal data.
+- **Embed** `/embed/event/[id]` (route handler, plain HTML card, no script, form or cookie; the button opens the main site in a new tab). `next.config.ts` sends `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` on every other route; the embed route alone allows `frame-ancestors *`. The developers page lists iframe snippets.
+- **Guest list** (`.../events/[id]/guests`, printable; name, seat, delivery, will-call pickup, checked in) and **customer CSV** (`/organizer/[orgId]/customers/csv`, own org's live buyers only, formula-safe `csvCell`, audited).
+
+#### Added: analytics, A/B, i18n, GDPR (5/8)
+- **Funnel**: `events_log (event_id, kind view|hold|order)` with no user, session or IP; logged by the event page, `place()` and `createOrder`; shown on the organizer report.
+- **A/B tests**: `feature_flags.variant_pct`; `bucket = sha256(flag:visitor) % 100` with the visitor id from an `ab` cookie set by middleware, so a visitor keeps the variant across login (tested: sticky, ~50 percent split, independent flags). Admin UI on `/admin/flags` (audited). Flag `ab_cta_text` changes the event page button text.
+- **i18n**: `lib/i18n.ts` en/es for the navigation and checkout, `lang` cookie from a header switch, `<html lang>` follows it.
+- **GDPR admin tools** `/admin/privacy`: export any user (JSON, audited) and erase (the shared `deleteAccount`, now with `null` = admin; blocked for admin accounts; pending offers withdrawn; audited). `exportData` also includes credit, gift cards bought, offers and reviews.
+
+#### Accessibility (6/8)
+Skip link, visible `:focus-visible` outline (and a thick ring on focused seats and sections), buttons and links at 4.5:1 or better (`#1d4ed8`), reduced-motion rule, labels on the checkout, login and signup fields, `main` landmark. Seat map: roving tabindex (one seat in the Tab order), Enter on a section focuses its first seat, arrow keys move between seats, Enter/Space select, Escape returns to the sections; seats have `role=button`, `aria-pressed` and full `aria-label`s. Checked by driving the page with keyboard events: section, arrows, select, hold, checkout.
+
+#### Schema
+`listings` (+3 columns), `payments.method` (+`credit`, `chargeback`), `artists.kind`, new tables `resale_offers`, `credits`, `disputes`, `gift_cards`, `events_log`, `reviews`, `api_keys`, `webhooks`. `npm run reset` is required.
+
+#### Tests
+`tests/p12b.test.ts` (+ `offers.worker.ts`): offer accept race (one winner), reserved price and ledger, lapsed reservation, price suggestion, gift card partial payment and refund back, gift card cannot be overspent, credit atomicity and refund-as-credit, chargeback lost (before and after settlement, zero-sum), review eligibility, digest idempotency and preferences, import matching, API key hashing / 401 / org scope / revoke / rate limit, webhook signature, clone and series, customer CSV, A/B stickiness, i18n, funnel privacy, admin erase.
+
 ## P12A review fixes
 
 #### Fixed

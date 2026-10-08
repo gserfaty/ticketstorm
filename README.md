@@ -116,6 +116,23 @@ Enter a code, pick child (50 percent), senior (25) or student (20) per ticket, a
 - **Checkout**: add a card at `/account/payment` and an address in your profile, and checkout becomes express (CVC still required). A protection yes/no step comes first. Pick a display currency in the header; `toronto-intl-demo` also uses local tax. `/lookup`: enter a guest order's email and number, read the code in `/dev/outbox`. `/account/linked` is a labelled simulation.
 - **Tickets**: the ticket page has a countdown, a "party link" (open it logged out: seats only, no codes), offline saving (needs a browser that allows service workers), and "Reclaim ticket (cancel transfer)" while a transfer is pending.
 
+## Trying the P12B features
+
+- **Offers**: log in as `fan2@` > `/seller`: `fan@` has offered $100 on the $125 listing. Accept it (reserved for `fan@` for 30 minutes at $100), then as `fan@` open `/seller` > "Check out at $100.00". Make your own offer from a listing on an event's tickets page. `/sell` shows a suggested price and notes that third-party resale is not integrated. `/claims` shows protection claim status.
+- **Gift cards and credit**: `fan@` has a $25 gift card from `fan2@` (code in `/dev/outbox`); `fan2@` has $20 account credit (`/account/payment`). Pay with a gift card code and a card on checkout: the card is charged only the rest. Buy cards, check balances and redeem to credit at `/gift-cards`. Refund as account credit from the organizer or admin order tools. Cards: `4242...` succeeds; a gift card or credit that covers the whole total needs no card.
+- **Chargebacks**: `/admin/disputes` lists a dispute on a `fan2@` order paid with the 0341 card. "Lost" refunds the bank and cancels the tickets; "Won" leaves everything.
+- **Reviews**: `fan@` attended `storm-settled-demo` (ticket scanned): that event shows an approved review; a venue review waits at `/admin/reviews`. Others cannot review.
+- **Content**: add-ons (VIP upgrade, food, shuttle) on `neon-harbor-empire-saturday`, camping on `neon-harbor-catskill-saturday`; team page `/artists/metro-thunder` (schedule, season bundle); `/venues/empire-arena` (views from the seats); `/favorites/import`; the weekly digest runs with `npm run jobs` (`fan@` opted in to email; check `/dev/outbox` and the inbox).
+- **Organizer tools** (`organizer@`, Storm Live): event page > clone and series; guest list; `/organizer/1/developers` (API keys, webhook, embed snippets, customers CSV). Demo API key (seed only): `tsk_0123456789abcdef0123456789abcdef0123456789abcdef`.
+  ```
+  curl -H "Authorization: Bearer tsk_0123456789abcdef0123456789abcdef0123456789abcdef" http://localhost:3000/api/v1/events
+  ```
+  Without a key you get 401. The seed's last order triggered a signed `order.created` webhook (webhook channel in `/dev/outbox`). Widget: `/embed/event/<id>`.
+- **Analytics and A/B**: organizer report > Funnel. `/admin/flags` > A/B tests: `ab_cta_text` is at 50 percent (the event page button reads "Find tickets" or "Get tickets now", sticky per browser; clear the `ab` cookie to re-roll).
+- **Language**: the header switch (English / Español) translates the navigation and checkout.
+- **Privacy tools**: `/admin/privacy` exports or erases any non-admin user.
+- **Keyboard**: on a seat map, Tab to a section, Enter, arrow keys between seats, Enter to select, then Tab to "Hold". The first Tab stop on every page is "Skip to main content".
+
 ## Test cards
 
 Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Behaviour is chosen by the last four digits. Card numbers and CVCs are never stored or logged; only brand and last4 are kept.
@@ -130,7 +147,7 @@ Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Be
 
 Checkout also asks a math question (single-use captcha) and has a hidden honeypot field.
 
-## Features implemented (P1 to P11)
+## Features implemented (P1 to P12B, everything in the plan)
 
 - **Accounts**: signup, login, logout, email verification, password reset (links in the dev outbox), scrypt hashing, cookie sessions, lazy guest sessions that survive login, `?next=` redirects.
 - **Discovery**: home (trending, near you), search with category, genre, city + radius, date range and quick "today / weekend / month" filters (venue-local dates), accessible-seating filter, suggest endpoint, category pages, event pages with lineup, venue info, status badges (On sale, Upcoming, Sold out, Cancelled, Postponed, Rescheduled, Ended).
@@ -152,7 +169,7 @@ Checkout also asks a math question (single-use captcha) and has a hidden honeypo
 
 - **Ticket states, rules, payouts, ops (P11)**: moving band and blur on the QR, mock wallet pass, NFC demo, ticket state everywhere, per-event transfer deadline and resale floor/ceiling/fees, seller payouts, organizer reports with CSV, settlement and marketing, admin fraud/refund/audit/support tools, impersonation, help center. See below.
 
-Upcoming (see [docs/plan.md](docs/plan.md)): P12B, features 12 to 22 of the nice-to-have sweep.
+- **P12A and P12B (nice-to-have sweep)**: map, guides, SEO, SSE availability, offline tickets, print and will-call, express checkout, currency display, guest lookup, and now resale offers with a seller dashboard and price suggestion, account credit, gift cards as partial payments, chargebacks, weekly digest, import artists, reviews by verified attendees, team pages with season tickets, more add-on kinds, clone/series, API keys with a read-only events API, signed webhooks, embeddable widget, guest list, customer export, analytics funnel, A/B tests, en/es, GDPR admin tools and a keyboard-accessible seat map. Third-party resale and other-vendor linking are labelled placeholders.
 
 ## Simulated external systems
 
@@ -162,7 +179,7 @@ Upcoming (see [docs/plan.md](docs/plan.md)): P12B, features 12 to 22 of the nice
 
 ## Tests
 
-`npm test` runs `node:test` suites in `tests/` (`tests/p11.test.ts` covers resale rules and fees, the zero-sum ledger, payouts (including a concurrent overdraw race), transfer deadlines and expiry, CSV escaping, settlement, campaigns, impersonation and support threads; `tests/p10.test.ts` covers ICS, unsubscribe tokens, alert idempotency, companion holds, search and recommendations; `tests/p9.test.ts` covers refund caps, exchange both ways, installments, OTP, fraud review, protection, comps, social state and account export/delete): auth, discovery helpers, a multi-connection hold race, payments and idempotency, SafeTix windows, organizer/scan/refund flows including concurrent scans, resale and transfers including concurrent buys, queue and bot defense, presales and Verified Fan, pricing (fees, tax, dynamic prices, promos, offers, add-ons, limits) and the orphan-seat rule. They use temporary SQLite files via `TICKETSTORM_DB`.
+`npm test` runs `node:test` suites in `tests/` (`tests/p12b.test.ts` covers the P12B features: offer races, gift cards, credit, chargebacks, reviews, digest, API keys, webhooks, A/B; `tests/p11.test.ts` covers resale rules and fees, the zero-sum ledger, payouts (including a concurrent overdraw race), transfer deadlines and expiry, CSV escaping, settlement, campaigns, impersonation and support threads; `tests/p10.test.ts` covers ICS, unsubscribe tokens, alert idempotency, companion holds, search and recommendations; `tests/p9.test.ts` covers refund caps, exchange both ways, installments, OTP, fraud review, protection, comps, social state and account export/delete): auth, discovery helpers, a multi-connection hold race, payments and idempotency, SafeTix windows, organizer/scan/refund flows including concurrent scans, resale and transfers including concurrent buys, queue and bot defense, presales and Verified Fan, pricing (fees, tax, dynamic prices, promos, offers, add-ons, limits) and the orphan-seat rule. They use temporary SQLite files via `TICKETSTORM_DB`.
 
 ## Docs
 
