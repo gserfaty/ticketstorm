@@ -2,6 +2,8 @@ import { db, tx } from './db.ts'
 import { promoteWaitlist, releaseEndedWindows, runLottery } from './access.ts'
 import { runAlerts } from './alerts.ts'
 import { chargeDueInstallments } from './installments.ts'
+import { expireListings } from './resale.ts'
+import { expireTransfers } from './transfers.ts'
 
 // Idempotent housekeeping. Expiry itself is lazy everywhere; this only tidies up.
 export function runJobs() {
@@ -20,6 +22,8 @@ export function runJobs() {
   runLottery()
   promoteWaitlist()
   chargeDueInstallments()
+  expireTransfers()
+  expireListings()
   runAlerts()
 }
 

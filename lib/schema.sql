@@ -318,12 +318,14 @@ CREATE TABLE IF NOT EXISTS orders (
   promo_id INTEGER,
   delivery TEXT NOT NULL DEFAULT 'mobile',
   source TEXT,
+  src TEXT, -- marketing source slug from ?src= (validated), reported per event
   refund_error TEXT, -- set when a refund failed at the gateway; order stays 'cancelled' until a retry succeeds
   review_reason TEXT, -- why status is 'review': fraud score, organizer hold, failed installment
   fraud_score INTEGER,
   idempotency_key TEXT NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id);
+CREATE INDEX IF NOT EXISTS orders_event ON orders(event_id);
 
 CREATE TABLE IF NOT EXISTS order_items (
   id INTEGER PRIMARY KEY,
@@ -429,6 +431,7 @@ CREATE TABLE IF NOT EXISTS listings (
   price_cents INTEGER NOT NULL CHECK (price_cents > 0),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','sold','cancelled','expired')),
   expires_at TEXT NOT NULL,
+  seller_fee_pct INTEGER NOT NULL DEFAULT 10, -- fixed when the listing is created or re-priced: what the seller was shown
   hold_id INTEGER REFERENCES holds(id),
   held_until TEXT
 );
@@ -444,6 +447,32 @@ CREATE TABLE IF NOT EXISTS ledger (
   ref TEXT
 );
 CREATE INDEX IF NOT EXISTS ledger_account ON ledger(account);
+CREATE INDEX IF NOT EXISTS ledger_ref ON ledger(ref);
+
+-- Payout requests of a user or an org. The ledger debit is written with the request (it reserves the funds); rejecting writes it back.
+CREATE TABLE IF NOT EXISTS payouts (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  account TEXT NOT NULL, -- 'user:ID' | 'org:ID'
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested','paid','rejected')),
+  requested_by INTEGER NOT NULL REFERENCES users(id),
+  decided_by INTEGER REFERENCES users(id),
+  decided_at TEXT
+);
+CREATE INDEX IF NOT EXISTS payouts_account ON payouts(account);
+
+-- One row per settled event: the PRIMARY KEY makes settlement idempotent.
+CREATE TABLE IF NOT EXISTS settlements (
+  event_id INTEGER PRIMARY KEY REFERENCES events(id),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  org_id INTEGER NOT NULL REFERENCES orgs(id),
+  collected INTEGER NOT NULL,
+  net INTEGER NOT NULL,
+  fees INTEGER NOT NULL,
+  tax INTEGER NOT NULL,
+  settled_by INTEGER REFERENCES users(id)
+);
 
 CREATE TABLE IF NOT EXISTS favorites (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

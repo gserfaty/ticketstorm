@@ -4,6 +4,7 @@ import { HoldError } from './inventory.ts'
 import { alertUser } from './alerts.ts'
 import { APP_URL, notify, sendEmail, sendSms } from './notify.ts'
 import { assertTradable } from './resale.ts'
+import { assertTransferOpen, transferCloses } from './rules.ts'
 
 const DAYS = 7
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
@@ -19,7 +20,8 @@ export function createTransfer(userId: number, ticketId: number, to: string): nu
   const phone = !email && /^\+?[\d\s().-]+$/.test(to) && digits(to).length >= 7 && digits(to).length <= 15 ? to : null
   if (!email && !phone) throw new HoldError('Enter an email address or phone number', 400)
   return tx(() => {
-    assertTradable(ticketId, userId)
+    const tt = assertTradable(ticketId, userId)
+    assertTransferOpen(tt.event_id)
     db.prepare("UPDATE transfers SET status = 'expired' WHERE ticket_id = ? AND status = 'pending' AND expires_at < ?").run(ticketId, new Date().toISOString())
     const me = db.prepare('SELECT email, phone, name FROM users WHERE id = ?').get(userId) as { email: string; phone: string | null; name: string }
     if (email === me.email.toLowerCase() || (phone && me.phone && digits(phone) === digits(me.phone))) throw new HoldError("You can't send a ticket to yourself", 400)
@@ -73,7 +75,8 @@ export function acceptTransfer(userId: number, transferId: number, token: string
     const t = pendingFor(transferId, token)
     if (t.from_user === userId) throw new HoldError("You can't accept your own transfer", 400)
     const old = db.prepare('SELECT order_id, inventory_id FROM tickets WHERE id = ?').get(t.ticket_id) as { order_id: number; inventory_id: number }
-    assertTradable(t.ticket_id, t.from_user)
+    const tt = assertTradable(t.ticket_id, t.from_user)
+    assertTransferOpen(tt.event_id) // the deadline applies at accept time too
     if (db.prepare("UPDATE transfers SET status = 'accepted', to_user = ? WHERE id = ? AND status = 'pending'").run(userId, transferId).changes !== 1) throw new HoldError('Transfer is no longer pending', 409)
     if (db.prepare("UPDATE tickets SET status = 'transferred' WHERE id = ? AND status = 'valid' AND owner_id = ?").run(t.ticket_id, t.from_user).changes !== 1) throw new HoldError('Ticket is no longer transferable', 409)
     const id = Number(
@@ -87,7 +90,28 @@ export function acceptTransfer(userId: number, transferId: number, token: string
 
 export function declineTransfer(transferId: number, token: string) {
   tx(() => {
-    pendingFor(transferId, token)
-    db.prepare("UPDATE transfers SET status = 'declined' WHERE id = ? AND status = 'pending'").run(transferId)
+    const t = pendingFor(transferId, token)
+    if (db.prepare("UPDATE transfers SET status = 'declined' WHERE id = ? AND status = 'pending'").run(transferId).changes === 1) {
+      notify(t.from_user, 'transfer', 'Your ticket transfer was declined', `${t.to_email ?? t.to_phone} declined the ticket. It is still yours.`, `/tickets/${t.ticket_id}`)
+    }
+  })
+}
+
+// Job: pending transfers past their 7 days, or past the event's transfer deadline, become 'expired' and the sender is told. Idempotent (conditional UPDATE).
+export function expireTransfers(now = Date.now()): number {
+  return tx(() => {
+    let n = 0
+    const rows = db
+      .prepare("SELECT t.id, t.from_user, t.ticket_id, t.expires_at, e.id AS event_id, e.starts_at FROM transfers t JOIN tickets k ON k.id = t.ticket_id JOIN inventory i ON i.id = k.inventory_id JOIN events e ON e.id = i.event_id WHERE t.status = 'pending'")
+      .all() as { id: number; from_user: number; ticket_id: number; expires_at: string; event_id: number; starts_at: string }[]
+    for (const r of rows) {
+      const closes = transferCloses(r.event_id, r.starts_at)
+      if (r.expires_at >= new Date(now).toISOString() && !(closes && now >= Date.parse(closes)) && now < Date.parse(r.starts_at)) continue
+      if (db.prepare("UPDATE transfers SET status = 'expired' WHERE id = ? AND status = 'pending'").run(r.id).changes === 1) {
+        n++
+        notify(r.from_user, 'transfer', 'Your ticket transfer expired', 'Nobody accepted it in time. The ticket is still yours.', `/tickets/${r.ticket_id}`)
+      }
+    }
+    return n
   })
 }

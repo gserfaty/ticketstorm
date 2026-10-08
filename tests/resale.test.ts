@@ -66,7 +66,7 @@ test('two concurrent buys of one listing: exactly one succeeds', async () => {
   assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM listings WHERE id = ? AND status = 'sold'", listingId).n, 1)
   assert.equal(status(t), 'resold')
   assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM tickets WHERE inventory_id = (SELECT inventory_id FROM tickets WHERE id = ?) AND status = 'valid'", t).n, 1)
-  assert.equal(balance(`user:${alice}`), 9000) // one credit, not four
+  assert.equal(balance(`user:${alice}`), 8100) // one credit (price - 10% seller fee), not four
 })
 
 test('resale: buyer gets a new ticket + secret, old code dies, ledger credited, seller cannot buy own', () => {
@@ -88,7 +88,7 @@ test('resale: buyer gets a new ticket + secret, old code dies, ledger credited, 
   assert.equal(fresh.owner_id, bob)
   assert.notEqual(fresh.secret, oldSecret)
   assert.equal(status(t), 'resold')
-  assert.equal(balance(`user:${alice}`), before + 7500)
+  assert.equal(balance(`user:${alice}`), before + 6750) // 7500 - 10%
   assert.equal(scan(t), 'invalid')
   assert.equal(scan(fresh.id), 'valid')
 })
@@ -161,12 +161,16 @@ test('cancel after resale: seller credit reversed once, both orders refunded', a
   const h = holdListing(listingId, { sessionToken: session, userId: bob })
   const r = finalize({ holdId: h.holdId, sessionToken: session, userId: bob, email: 'bob@x.test', key: 'cancel-key-padding', method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false, billing: { name: 'B', address: 'a', city: 'c', zip: '1' } })
   assert.ok('orderId' in r)
-  const net = () => get<{ s: number }>("SELECT coalesce(sum(amount), 0) AS s FROM ledger WHERE ref LIKE ?", `listing:${listingId}%`).s
-  assert.equal(net(), 6000)
+  const seller = () => get<{ s: number }>("SELECT coalesce(sum(amount), 0) AS s FROM ledger WHERE account = ? AND ref LIKE ?", `user:${alice}`, `listing:${listingId}%`).s
+  const all = () => get<{ s: number }>("SELECT coalesce(sum(amount), 0) AS s FROM ledger WHERE ref LIKE ?", `listing:${listingId}%`).s
+  assert.equal(seller(), 5400) // 6000 - 10% seller fee
   refundEvent(ev)
-  assert.equal(net(), 0)
+  assert.equal(seller(), 0) // the net credit is reversed
+  assert.equal(all(), 0)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM ledger WHERE ref = ? AND account = 'platform'", `listing:${listingId}:reversal`).n, 2) // platform fee rows reversed too
   refundEvent(ev) // idempotent
-  assert.equal(net(), 0)
+  assert.equal(seller(), 0)
+  assert.equal(get<{ s: number }>('SELECT sum(amount) AS s FROM ledger').s, 0) // zero-sum
   const orders = [get<{ order_id: number }>('SELECT order_id FROM tickets WHERE id = ?', t).order_id, r.orderId]
   for (const o of orders) assert.equal(get<{ status: string }>('SELECT status FROM orders WHERE id = ?', o).status, 'refunded')
 })

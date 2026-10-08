@@ -4,7 +4,6 @@ import { assertTicketLimit, HoldError } from './inventory.ts'
 import { paidOf, recordCharge, refundedOf, refundMoney } from './payments.ts'
 import type { Method, Payment } from './payments.ts'
 import { allocate, quote } from './pricing.ts'
-import { ledgerAdd } from './ledger.ts'
 import { settleListing } from './resale.ts'
 import { alertUser } from './alerts.ts'
 import { APP_URL, notify, sendEmail } from './notify.ts'
@@ -26,13 +25,15 @@ export type PayInput = {
   exp: string
   save: boolean
   billing: { name: string; address: string; city: string; zip: string }
+  src?: string // marketing source slug (validated by the caller)
 }
 export type PayResult = { orderId: number } | { declined: string } | { threeDs: number } | { paypal: string }
 
+export const validSrc = (s?: string | null): s is string => !!s && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(s)
 // add-on kinds that get a scannable pass
 export const PASS_KINDS = ['parking', 'hospitality']
 
-type Meta = Pick<PayInput, 'userId' | 'email' | 'exp' | 'save' | 'billing'> & { total?: number; installments?: boolean } // total: full price when the payment is only the first quarter
+type Meta = Pick<PayInput, 'userId' | 'email' | 'exp' | 'save' | 'billing' | 'src'> & { total?: number; installments?: boolean } // total: full price when the payment is only the first quarter
 
 // The session's active, unexpired hold, or undefined. Ownership is the session token, never a user-supplied id alone.
 export function liveHold(holdId: number, sessionToken: string) {
@@ -62,7 +63,7 @@ export function finalize(i: PayInput): PayResult {
     if (q.promoError) throw new HoldError(q.promoError, 409)
     // bundle holds carry one line per game; only this event's own tickets count against this event's limit
     assertTicketLimit(i.userId, hold.event_id, q.lines.filter((l) => l.eventId === hold.event_id).length, i.sessionToken, i.email)
-    const meta: Meta = { userId: i.userId, email: i.email, exp: i.exp, save: i.save, billing: i.billing }
+    const meta: Meta = { userId: i.userId, email: i.email, exp: i.exp, save: i.save, billing: i.billing, ...(validSrc(i.src) ? { src: i.src } : {}) }
     let amount = q.total
     let method = i.method
     if (i.installments) {
@@ -94,7 +95,7 @@ function createOrder(p: Payment): number {
   // Resale hold: the seat is already sold; settle the listing (seller ticket 'resold', ledger credit) so the buyer's new ticket can be inserted below.
   // Otherwise: hold_id match + exact count, any row lost to another hold or expiry rolls the whole thing back.
   const listingId = q.lines[0].listingId
-  if (listingId) settleListing(listingId, hold.id, m.userId)
+  if (listingId) settleListing(listingId, hold.id, m.userId, { fee: q.fees, tax: q.tax })
   else {
     const sold = db.prepare("UPDATE inventory SET status = 'sold', held_until = NULL WHERE hold_id = ? AND status = 'held' AND held_until > ?").run(hold.id, now)
     if (sold.changes !== q.lines.length) throw new HoldError('Your tickets are no longer held', 409)
@@ -114,10 +115,10 @@ function createOrder(p: Payment): number {
   const review = fraud.score >= REVIEW_AT
   const order = db
     .prepare(
-      `INSERT INTO orders (user_id, session_token, access_token, email, event_id, hold_id, status, subtotal, fees, tax, protection, discount, promo_id, total, idempotency_key, fraud_score, review_reason)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+      `INSERT INTO orders (user_id, session_token, access_token, email, event_id, hold_id, status, subtotal, fees, tax, protection, discount, promo_id, total, idempotency_key, fraud_score, review_reason, source, src)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
     )
-    .get(m.userId, p.session_token, accessToken, m.email, hold.event_id, hold.id, review ? 'review' : 'paid', q.subtotal, q.fees, q.tax, q.protection, q.discount, q.promo?.id ?? null, q.total, p.idempotency_key, fraud.score, review ? fraud.reasons.join(' + ') : null) as { id: number }
+    .get(m.userId, p.session_token, accessToken, m.email, hold.event_id, hold.id, review ? 'review' : 'paid', q.subtotal, q.fees, q.tax, q.protection, q.discount, q.promo?.id ?? null, q.total, p.idempotency_key, fraud.score, review ? fraud.reasons.join(' + ') : null, listingId ? 'resale' : null, m.src ?? null) as { id: number }
   const item = db.prepare("INSERT INTO order_items (order_id, kind, inventory_id, offer_id, unit_cents, fee_cents, tax_cents) VALUES (?, 'ticket', ?,?,?,?,?)")
   const ticket = db.prepare('INSERT INTO tickets (order_id, inventory_id, owner_id, secret) VALUES (?,?,?,?)')
   for (const l of q.lines) {
@@ -341,9 +342,11 @@ export function refundEvent(eventId: number): { refunded: number; failed: number
     const mine = "ticket_id IN (SELECT t.id FROM tickets t JOIN inventory i ON i.id = t.inventory_id WHERE i.event_id = ?)"
     db.prepare(`UPDATE listings SET status = 'cancelled', hold_id = NULL, held_until = NULL WHERE status = 'active' AND ${mine}`).run(eventId)
     db.prepare(`UPDATE transfers SET status = 'cancelled' WHERE status = 'pending' AND ${mine}`).run(eventId)
-    // a resold ticket is refunded to both its original and its new order, so take the seller's credit back (once per listing)
-    for (const l of db.prepare(`SELECT id, seller_id, price_cents FROM listings WHERE status = 'sold' AND ${mine}`).all(eventId) as { id: number; seller_id: number; price_cents: number }[]) {
-      if (!db.prepare('SELECT 1 FROM ledger WHERE ref = ?').get(`listing:${l.id}:reversal`)) ledgerAdd(`user:${l.seller_id}`, 'resale_credit', -l.price_cents, `listing:${l.id}:reversal`)
+    // a resold ticket is refunded to both its original and its new order, so take back every ledger row of the resale (seller net, fees, tax, cash), once per listing
+    for (const l of db.prepare(`SELECT id FROM listings WHERE status = 'sold' AND ${mine}`).all(eventId) as { id: number }[]) {
+      if (!db.prepare('SELECT 1 FROM ledger WHERE ref = ?').get(`listing:${l.id}:reversal`)) {
+        db.prepare('INSERT INTO ledger (account, kind, amount, ref) SELECT account, kind, -amount, ? FROM ledger WHERE ref = ?').run(`listing:${l.id}:reversal`, `listing:${l.id}`)
+      }
     }
   })
   const orders = db

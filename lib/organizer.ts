@@ -120,6 +120,8 @@ export function changeDate(eventId: number, kind: 'postponed' | 'rescheduled', n
     // a new date opens a 14-day window (never past the new show) in which any ticket holder can ask for a refund
     const window = kind === 'rescheduled' ? new Date(Math.min(Date.now() + 14 * 86_400_000, Date.parse(starts))).toISOString() : null
     db.prepare('UPDATE events SET status = ?, starts_at = ?, doors_at = ?, refund_window_until = coalesce(?, refund_window_until) WHERE id = ?').run(kind, starts, doors, window, eventId)
+    // listings expire at event start: follow a new date
+    db.prepare("UPDATE listings SET expires_at = ? WHERE status = 'active' AND ticket_id IN (SELECT t.id FROM tickets t JOIN inventory i ON i.id = t.inventory_id WHERE i.event_id = ?)").run(starts, eventId)
     const { tz } = ev
     const when = kind === 'rescheduled' ? `new date: ${fmtDateTimeTz(starts, tz)}` : 'new date to be announced'
     const holders = db

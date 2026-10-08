@@ -1,5 +1,6 @@
 import { db } from './db.ts'
 import { UserError } from './platform.ts'
+import { resaleRule } from './rules.ts'
 
 export type FeeRule = { service_pct: number; facility_cents: number; order_cents: number; delivery_cents?: number }
 export const DEFAULT_FEES: FeeRule = { service_pct: 10, facility_cents: 300, order_cents: 250, delivery_cents: 0 }
@@ -241,7 +242,9 @@ export function quote(holdId: number): Quote {
   const faceTotal = units.reduce((a, b) => a + b, 0)
   const discount = promo ? discountFor(promo, faceTotal) : 0
   const share = allocate(units, discount)
-  const p = price(units.map((u, i) => u - share[i]), ctx.rule, ctx.bps)
+  // resale: the buyer pays the event's resale buyer fee (a % of the price) instead of the primary service, facility and order fees
+  const rule: FeeRule = resale.length ? { service_pct: resaleRule(hold.event_id).buyer_fee_pct, facility_cents: 0, order_cents: 0, delivery_cents: 0 } : ctx.rule
+  const p = price(units.map((u, i) => u - share[i]), rule, ctx.bps)
   const lines: Line[] = rows.map((r, i) => ({
     inventoryId: r.id,
     eventId: r.event_id,
