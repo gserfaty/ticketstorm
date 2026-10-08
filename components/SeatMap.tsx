@@ -285,7 +285,7 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
             {hold.ga && <li>{hold.ga.qty} × General admission {sectionById.get(hold.ga.sectionId)?.name}</li>}
             {listed.map((s) => <li key={s[0]}>{seatLabel(s)} · {usd(price(s[0]))}</li>)}
           </ul>
-          <button onClick={() => release()}>Release</button> <button disabled title="Checkout arrives in the next phase">Checkout</button>
+          <button onClick={() => release()}>Release</button> <a className="btn" href={`/checkout/${hold.id}`}>Checkout</a>
         </div>
       ) : selected.length > 0 && (
         <div className="card">

@@ -257,3 +257,86 @@ CREATE TABLE IF NOT EXISTS inventory (
 );
 CREATE INDEX IF NOT EXISTS inventory_status ON inventory(event_id, status);
 CREATE INDEX IF NOT EXISTS inventory_hold ON inventory(hold_id);
+
+-- Orders, tickets, payments (P4)
+CREATE TABLE IF NOT EXISTS orders (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  user_id INTEGER REFERENCES users(id),
+  session_token TEXT NOT NULL, -- buyer's session: authorizes guest orders
+  access_token TEXT NOT NULL,  -- unguessable emailed-link credential for guest orders
+  email TEXT NOT NULL,
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  hold_id INTEGER NOT NULL UNIQUE REFERENCES holds(id), -- one order per hold
+  status TEXT NOT NULL DEFAULT 'paid' CHECK (status IN ('pending','paid','review','cancelled','refunded','partially_refunded')),
+  subtotal INTEGER NOT NULL,
+  fees INTEGER NOT NULL,
+  tax INTEGER NOT NULL,
+  protection INTEGER NOT NULL DEFAULT 0,
+  discount INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL,
+  promo_id INTEGER,
+  delivery TEXT NOT NULL DEFAULT 'mobile',
+  source TEXT,
+  idempotency_key TEXT NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id);
+
+CREATE TABLE IF NOT EXISTS order_items (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  order_id INTEGER NOT NULL REFERENCES orders(id),
+  kind TEXT NOT NULL DEFAULT 'ticket' CHECK (kind IN ('ticket','addon','protection','giftcard')),
+  inventory_id INTEGER REFERENCES inventory(id),
+  addon_id INTEGER,
+  offer_id INTEGER,
+  unit_cents INTEGER NOT NULL,
+  fee_cents INTEGER NOT NULL DEFAULT 0,
+  tax_cents INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS order_items_order ON order_items(order_id);
+
+CREATE TABLE IF NOT EXISTS tickets (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  order_id INTEGER NOT NULL REFERENCES orders(id),
+  inventory_id INTEGER NOT NULL REFERENCES inventory(id),
+  owner_id INTEGER REFERENCES users(id), -- NULL = guest order
+  status TEXT NOT NULL DEFAULT 'valid' CHECK (status IN ('valid','used','transferred','listed','resold','cancelled','expired')),
+  secret TEXT NOT NULL,
+  scanned_at TEXT,
+  scanned_by INTEGER REFERENCES users(id),
+  restrictions TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_live_ticket ON tickets(inventory_id) WHERE status IN ('valid','listed','used');
+CREATE INDEX IF NOT EXISTS tickets_owner ON tickets(owner_id);
+CREATE INDEX IF NOT EXISTS tickets_order ON tickets(order_id);
+
+CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  order_id INTEGER REFERENCES orders(id), -- NULL until the order exists (3DS in flight, declines)
+  hold_id INTEGER REFERENCES holds(id),
+  session_token TEXT,
+  kind TEXT NOT NULL DEFAULT 'charge' CHECK (kind IN ('charge','refund','payout')),
+  method TEXT NOT NULL DEFAULT 'card' CHECK (method IN ('card','saved','applepay','googlepay','paypal','giftcard','installments')),
+  amount INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('succeeded','declined','requires_3ds','pending')),
+  brand TEXT,
+  last4 TEXT,
+  decline_code TEXT,
+  meta TEXT, -- JSON: contact + billing + save-card flag. Never card number or CVC.
+  idempotency_key TEXT NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS payments_order ON payments(order_id);
+
+CREATE TABLE IF NOT EXISTS saved_cards (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  brand TEXT NOT NULL,
+  last4 TEXT NOT NULL,
+  exp TEXT NOT NULL,
+  fake_token TEXT NOT NULL,
+  UNIQUE(user_id, brand, last4)
+);

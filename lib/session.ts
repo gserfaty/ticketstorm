@@ -2,6 +2,7 @@ import { cookies } from 'next/headers'
 import { notFound, redirect } from 'next/navigation'
 import { db } from './db.ts'
 import { randomToken } from './auth.ts'
+import type { Viewer } from './orders.ts'
 
 export const COOKIE = 'ticketstorm_session'
 const DAYS = 30
@@ -57,6 +58,12 @@ export async function getUser(): Promise<User | undefined> {
   return db
     .prepare("SELECT id, email, name, role, email_verified_at, status FROM users WHERE id = ? AND status = 'active'")
     .get(s.user_id) as User | undefined
+}
+
+// Who is looking, for order/ticket authorization. `token` is the emailed-link credential, if any.
+export async function getViewer(token?: string | null): Promise<Viewer> {
+  const s = await getSession()
+  return { userId: (await getUser())?.id ?? null, sessionToken: s?.token ?? null, token }
 }
 
 export async function requireUser(): Promise<User> {

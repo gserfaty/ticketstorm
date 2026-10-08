@@ -49,3 +49,5 @@ pre { white-space:pre-wrap; word-break:break-word; margin:0 }
 .holdbar { border:1px solid var(--ok) }
 .card ul { padding-left:1.25rem }
 @media (max-width:600px) { main { padding:.5rem } .map-controls label, .map-controls select { flex:1 1 40% } }
+a.btn { display:inline-block; padding:.4rem .6rem; border-radius:6px; background:var(--accent); color:#fff; text-decoration:none }
+table td { padding:.15rem 1rem .15rem 0 }

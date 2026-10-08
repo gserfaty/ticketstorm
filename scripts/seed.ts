@@ -2,7 +2,8 @@
 import { db, tx } from '../lib/db.ts'
 import { hashPassword } from '../lib/auth.ts'
 import { generateVenue, venueCapacity } from '../lib/venue-gen.ts'
-import { generateInventory } from '../lib/inventory.ts'
+import { generateInventory, holdBestAvailable } from '../lib/inventory.ts'
+import { finalize } from '../lib/orders.ts'
 import type { VenueKind } from '../lib/venue-gen.ts'
 
 if (db.prepare('SELECT count(*) AS n FROM users').get()!.n) {
@@ -249,5 +250,17 @@ tx(() => {
     generateInventory(e.id, e.id === series[0] ? '202' : null)
   }
 })
+
+// fan@ gets a paid order (2 seats, upcoming event) through the real checkout path, so /tickets has content.
+{
+  const fan = db.prepare("SELECT id, email FROM users WHERE email = 'fan@ticketstorm.test'").get() as { id: number; email: string }
+  const ev = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-empire-saturday'").get() as { id: number }
+  const owner = { sessionToken: 'seed-fan-session', userId: fan.id }
+  const held = holdBestAvailable(ev.id, owner, 2)
+  finalize({
+    holdId: held.holdId, sessionToken: owner.sessionToken, userId: fan.id, email: fan.email, key: 'seed-fan-order-1', method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: true,
+    billing: { name: 'Frankie Fan', address: '1 Main St', city: 'New York', zip: '10001' },
+  })
+}
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')
