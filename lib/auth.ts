@@ -9,7 +9,8 @@ export function verifyPassword(password: string, stored: string): boolean {
   const [alg, salt, hash] = stored.split('$')
   if (alg !== 'scrypt' || !salt || !hash) return false
   const expected = Buffer.from(hash, 'hex')
-  return timingSafeEqual(scryptSync(password, Buffer.from(salt, 'hex'), 64), expected)
+  const actual = scryptSync(password, Buffer.from(salt, 'hex'), 64)
+  return actual.length === expected.length && timingSafeEqual(actual, expected)
 }
 
 export function randomToken(): string {

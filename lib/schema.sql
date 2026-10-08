@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   impersonator_id INTEGER REFERENCES users(id)
 );
 
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+
 CREATE TABLE IF NOT EXISTS codes (
   id INTEGER PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -164,6 +166,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_starts ON events(starts_at);
 CREATE INDEX IF NOT EXISTS events_series ON events(series_key);
+CREATE INDEX IF NOT EXISTS events_venue ON events(venue_id);
 
 CREATE TABLE IF NOT EXISTS event_artists (
   event_id INTEGER NOT NULL REFERENCES events(id),
@@ -191,6 +194,8 @@ CREATE TABLE IF NOT EXISTS offers (
   name TEXT NOT NULL CHECK (name IN ('adult','child','senior','student')),
   pct_off INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS event_artists_artist ON event_artists(artist_id);
 
 -- Platform bits P1 needs
 CREATE TABLE IF NOT EXISTS settings (

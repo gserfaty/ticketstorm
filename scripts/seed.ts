@@ -154,8 +154,7 @@ tx(() => {
     `INSERT INTO events (org_id, venue_id, series_key, slug, title, category, genre, starts_at, doors_at, description, info, status, onsale_at, popularity)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
   const insBill = db.prepare('INSERT INTO event_artists (event_id, artist_id, billing) VALUES (?,?,?)')
-  const slugs = new Set<string>()
-
+  
   // 80 upcoming (days 3..120) + 3 past
   const offsets = [...Array.from({ length: 80 }, () => int(3, 120)), -12, -30, -55]
   offsets.forEach((off, i) => {
@@ -170,9 +169,7 @@ tx(() => {
     const title = a.category === 'sports'
       ? `${a.name} vs ${opp.name}`
       : pick([`${a.name} Live`, `${a.name}: The Storm Tour`, `An Evening with ${a.name}`])
-    let slug = `${slugify(title)}-${d.toISOString().slice(0, 10)}`
-    if (slugs.has(slug)) slug += `-${i}`
-    slugs.add(slug)
+    const slug = `${slugify(title)}-${i}`
 
     let status = 'published'
     if (off > 0 && i === 5) status = 'cancelled'
