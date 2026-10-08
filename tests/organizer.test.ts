@@ -153,3 +153,14 @@ test('killed row is blocked and cannot be held; sold seats are untouched', () =>
   assert.equal(org.applyInventory(ev, sec, 'A', 'release'), 59)
   assert.ok(inv.holdBestAvailable(ev, { sessionToken: 'k', userId: null }, 1))
 })
+
+test('single-seat kill, doors/on-sale validation', () => {
+  const ev = makeEvent('single')
+  assert.equal(org.applyInventory(ev, sec, 'A', 'kill', undefined, 3, 3), 1)
+  assert.equal(org.applyInventory(ev, sec, 'A', 'kill', undefined, 5, 7), 3)
+  assert.throws(() => org.applyInventory(ev, sec, '', 'kill', undefined, 1, 2), UserError)
+  assert.throws(() => org.setOnsale(ev, new Date(Date.now() + 9 * 864e5).toISOString()), /before the event/)
+  const base = { title: 't', category: 'music', genre: '', venueId: venue, image: '', description: '' }
+  const s = new Date(Date.now() + 864e5).toISOString()
+  assert.throws(() => org.createEvent(orgId, { ...base, startsAt: s, doorsAt: new Date(Date.now() + 2 * 864e5).toISOString() }), /Doors/)
+})

@@ -6,20 +6,23 @@ export type ScanResult = { result: 'valid' | 'used' | 'expired' | 'invalid' | 'w
 
 // Verify a SafeTix token for `eventId` and admit the ticket. Admission is ONE conditional UPDATE (status='valid'),
 // so concurrent scans of the same ticket cannot both win, whatever connection they come from.
-// `atMs` is when the code was scanned (offline queue replays pass the original time); it is clamped to the last day.
+// `atMs` is when the code was scanned (offline queue replays pass the original time).
+// ponytail: we trust staff-supplied `atMs` as long as it falls in the event-day window (doors-6h .. start+12h); a scanner
+// device could back-date within that window to replay a stale screenshot. Fix: sign queued scans on-device or cap by server receive time.
 export function scanTicket(eventId: number, token: string, scannerId: number, atMs = Date.now()): ScanResult {
   const now = Date.now()
-  const at = atMs > now + 60_000 || atMs < now - 86_400_000 ? now : atMs
   const id = tokenTicketId(token)
   const t = id
     ? (db
         .prepare(
-          `SELECT t.id, t.status, t.secret, t.scanned_at, i.event_id, v.tz FROM tickets t JOIN inventory i ON i.id = t.inventory_id
+          `SELECT t.id, t.status, t.secret, t.scanned_at, i.event_id, v.tz, e.starts_at, e.doors_at FROM tickets t JOIN inventory i ON i.id = t.inventory_id
            JOIN events e ON e.id = i.event_id JOIN venues v ON v.id = e.venue_id WHERE t.id = ?`,
         )
-        .get(id) as { id: number; status: string; secret: string; scanned_at: string | null; event_id: number; tz: string } | undefined)
+        .get(id) as { id: number; status: string; secret: string; scanned_at: string | null; event_id: number; tz: string; starts_at: string; doors_at: string | null } | undefined)
     : undefined
   if (!t) return { result: 'invalid', message: 'Invalid code' }
+  const open = Date.parse(t.doors_at ?? t.starts_at) - 6 * 3_600_000
+  const at = atMs > now + 60_000 || atMs < open || atMs > Date.parse(t.starts_at) + 12 * 3_600_000 ? now : atMs
   if (t.event_id !== eventId) return { result: 'wrong_event', message: 'Ticket is for a different event', ticketId: t.id }
   if (!verifyToken(token, t.secret, at)) {
     // genuine HMAC but outside the +/-1 window = stale code (screenshot); anything else is forged
@@ -31,7 +34,7 @@ export function scanTicket(eventId: number, token: string, scannerId: number, at
   if (r.changes === 1) return { result: 'valid', message: 'Valid', ticketId: t.id }
   const now2 = db.prepare('SELECT status, scanned_at FROM tickets WHERE id = ?').get(t.id) as { status: string; scanned_at: string | null }
   return now2.status === 'used' && now2.scanned_at
-    ? { result: 'used', message: `Already used. Already scanned at ${fmtTime(now2.scanned_at, t.tz)}`, ticketId: t.id }
+    ? { result: 'used', message: `Already scanned at ${fmtTime(now2.scanned_at, t.tz)}`, ticketId: t.id }
     : { result: 'invalid', message: `Ticket is ${now2.status}`, ticketId: t.id }
 }
 

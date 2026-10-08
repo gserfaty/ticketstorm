@@ -31,6 +31,8 @@ export default async function Inventory({ params, searchParams }: { params: Prom
           <input type="hidden" name="page" value="inventory" />
           <select name="sectionId" aria-label="Section">{sections.map((s) => <option key={s.id} value={s.id}>{s.name}{s.kind === 'ga' ? ' (GA)' : ''}</option>)}</select>
           <input name="row" placeholder="Row (blank = whole section)" aria-label="Row" />
+          <input name="from" type="number" min="1" placeholder="From seat" aria-label="From seat" />
+          <input name="to" type="number" min="1" placeholder="To seat" aria-label="To seat" />
           <select name="op" aria-label="Action">
             <option value="level">Assign price level</option>
             {BLOCK_KINDS.map((k) => <option key={k} value={k}>{k === 'kill' ? 'Kill (block)' : `Block: ${k}`}</option>)}

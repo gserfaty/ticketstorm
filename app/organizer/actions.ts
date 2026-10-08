@@ -141,7 +141,7 @@ export async function inventoryAction(f: FormData) {
   let n = 0
   run(e.back, () => {
     const op = text(f, 'op')
-    n = org.applyInventory(e.id, num(f, 'sectionId'), text(f, 'row'), op, num(f, 'levelId') || undefined)
+    n = org.applyInventory(e.id, num(f, 'sectionId'), text(f, 'row'), op, num(f, 'levelId') || undefined, num(f, 'from') || undefined, num(f, 'to') || undefined)
     audit(e.user.id, 'inventory.apply', `event:${e.id}`, { op, section: num(f, 'sectionId'), row: text(f, 'row'), n })
   }, 'Updated')
 }

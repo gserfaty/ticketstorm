@@ -76,6 +76,7 @@ export async function toggleFlag(f: FormData) {
 export async function retryRefunds(f: FormData) {
   const admin = await requireAdmin()
   const id = num(f, 'eventId')
+  if (!db.prepare("SELECT 1 FROM events WHERE id = ? AND status = 'cancelled'").get(id)) refuse('/admin/refunds', 'Only cancelled events can be retried')
   const r = refundEvent(id)
   audit(admin.id, 'refund.retry', `event:${id}`, r)
   done('/admin/refunds', `${r.refunded} refunded, ${r.failed} still failing`)

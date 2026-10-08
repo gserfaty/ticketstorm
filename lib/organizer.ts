@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { db, tx } from './db.ts'
 import { CATEGORIES } from './events.ts'
-import { slugify } from './format.ts'
+import { fmtDateTimeTz, slugify } from './format.ts'
 import { generateInventory } from './inventory.ts'
 import { notify, sendEmail, APP_URL } from './notify.ts'
 import { flagOn, UserError } from './platform.ts'
@@ -39,6 +39,7 @@ function checkEvent(orgId: number, f: EventForm) {
   if (!f.title || f.title.length > 120) throw new UserError('Title required (120 characters max)')
   if (!CATEGORIES.some((c) => c.slug === f.category)) throw new UserError('Pick a category')
   if (!f.startsAt) throw new UserError('Enter a valid start date and time')
+  if (f.doorsAt && f.doorsAt > f.startsAt) throw new UserError('Doors must open before the event starts')
   if (f.image && !/^https?:\/\//.test(f.image)) throw new UserError('Image must be an http(s) URL')
   if (!db.prepare('SELECT 1 FROM venues WHERE id = ? AND org_id = ?').get(f.venueId, orgId)) throw new UserError('Pick one of your venues')
 }
@@ -85,7 +86,7 @@ export function publishEvent(eventId: number) {
 // Tickets stay valid. postponed = no new date yet; rescheduled = new date (doors move with it). Holders are told.
 export function changeDate(eventId: number, kind: 'postponed' | 'rescheduled', newStart?: string | null) {
   tx(() => {
-    const ev = db.prepare('SELECT title, status, starts_at, doors_at FROM events WHERE id = ?').get(eventId) as { title: string; status: string; starts_at: string; doors_at: string | null }
+    const ev = db.prepare('SELECT e.title, e.status, e.starts_at, e.doors_at, v.tz FROM events e JOIN venues v ON v.id = e.venue_id WHERE e.id = ?').get(eventId) as { tz: string; title: string; status: string; starts_at: string; doors_at: string | null }
     if (!['published', 'postponed', 'rescheduled'].includes(ev.status)) throw new UserError('Only published events can be postponed or rescheduled')
     let starts = ev.starts_at
     let doors = ev.doors_at
@@ -96,7 +97,8 @@ export function changeDate(eventId: number, kind: 'postponed' | 'rescheduled', n
       starts = newStart
     } else if (ev.status === 'postponed') return
     db.prepare('UPDATE events SET status = ?, starts_at = ?, doors_at = ? WHERE id = ?').run(kind, starts, doors, eventId)
-    const when = kind === 'rescheduled' ? `new date: ${starts}` : 'new date to be announced'
+    const { tz } = ev
+    const when = kind === 'rescheduled' ? `new date: ${fmtDateTimeTz(starts, tz)}` : 'new date to be announced'
     const holders = db
       .prepare(
         `SELECT DISTINCT o.id, o.email, o.user_id, o.access_token FROM tickets t JOIN orders o ON o.id = t.order_id JOIN inventory i ON i.id = t.inventory_id
@@ -140,15 +142,24 @@ export function setFees(eventId: number, f: { service_pct: unknown; facility_cen
   db.prepare('UPDATE events SET fee_rule = ? WHERE id = ?').run(JSON.stringify(rule), eventId)
 }
 
-export const setOnsale = (eventId: number, iso: string | null) => void db.prepare('UPDATE events SET onsale_at = ? WHERE id = ?').run(iso, eventId)
+export function setOnsale(eventId: number, iso: string | null) {
+  const ev = db.prepare('SELECT starts_at FROM events WHERE id = ?').get(eventId) as { starts_at: string }
+  if (iso && iso >= ev.starts_at) throw new UserError('On-sale must be before the event starts')
+  db.prepare('UPDATE events SET onsale_at = ? WHERE id = ?').run(iso, eventId)
+}
 
 // ---- inventory ----
 // op: a price level id, 'release', or a block_kind. Only free seats are touched (never held/sold). Blank row = whole section.
-export function applyInventory(eventId: number, sectionId: number, row: string, op: string, levelId?: number): number {
+export function applyInventory(eventId: number, sectionId: number, row: string, op: string, levelId?: number, from?: number, to?: number): number {
   const ev = db.prepare('SELECT venue_id FROM events WHERE id = ?').get(eventId) as { venue_id: number }
   if (!db.prepare('SELECT 1 FROM sections WHERE id = ? AND venue_id = ?').get(sectionId, ev.venue_id)) throw new UserError('Unknown section')
-  const where = `event_id = ? AND section_id = ? AND (? = '' OR seat_id IN (SELECT id FROM seats WHERE section_id = ? AND row = ?))`
-  const args = [eventId, sectionId, row, sectionId, row]
+  // optional seat range within the row (from..to); needs a row
+  if ((from || to) && !row) throw new UserError('Enter a row for a seat range')
+  const lo = from || 1
+  const hi = to || from || 1_000_000
+  if (lo > hi) throw new UserError('Seat range is backwards')
+  const where = `event_id = ? AND section_id = ? AND (? = '' OR seat_id IN (SELECT id FROM seats WHERE section_id = ? AND row = ? AND number BETWEEN ? AND ?))`
+  const args = [eventId, sectionId, row, sectionId, row, lo, hi]
   let r
   if (op === 'level') {
     if (!db.prepare('SELECT 1 FROM price_levels WHERE id = ? AND event_id = ?').get(levelId ?? null, eventId)) throw new UserError('Pick a price level')

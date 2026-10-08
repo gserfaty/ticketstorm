@@ -25,7 +25,10 @@ export default function Scanner({ eventId, initial }: { eventId: number; initial
   const post = async (i: Item): Promise<Outcome | null> => {
     try {
       const r = await fetch('/api/scan', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(i) })
-      if (r.status >= 500) return null
+      if (r.status >= 500 || r.status === 401 || r.status === 403) {
+        if (r.status < 500) setLast({ result: 'invalid', message: 'Signed out or not allowed: sign in again. Scans stay queued.' })
+        return null
+      }
       const j = await r.json()
       return r.ok ? j : { result: 'invalid', message: j.error ?? 'Error' }
     } catch {
