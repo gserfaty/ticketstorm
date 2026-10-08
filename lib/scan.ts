@@ -15,11 +15,11 @@ export function scanTicket(eventId: number, token: string, scannerId: number, at
   const t = id
     ? (db
         .prepare(
-          `SELECT t.id, t.status, t.secret, t.scanned_at, e.id AS event_id, v.tz, e.starts_at, e.doors_at, a.name AS addon
-           FROM tickets t LEFT JOIN inventory i ON i.id = t.inventory_id LEFT JOIN addons a ON a.id = t.addon_id
+          `SELECT t.id, t.status, t.secret, t.scanned_at, o.status AS order_status, e.id AS event_id, v.tz, e.starts_at, e.doors_at, a.name AS addon
+           FROM tickets t JOIN orders o ON o.id = t.order_id LEFT JOIN inventory i ON i.id = t.inventory_id LEFT JOIN addons a ON a.id = t.addon_id
            JOIN events e ON e.id = coalesce(i.event_id, a.event_id) JOIN venues v ON v.id = e.venue_id WHERE t.id = ?`,
         )
-        .get(id) as { id: number; status: string; secret: string; scanned_at: string | null; event_id: number; tz: string; starts_at: string; doors_at: string | null; addon: string | null } | undefined)
+        .get(id) as { id: number; status: string; secret: string; scanned_at: string | null; order_status: string; event_id: number; tz: string; starts_at: string; doors_at: string | null; addon: string | null } | undefined)
     : undefined
   if (!t) return { result: 'invalid', message: 'Invalid code' }
   const open = Date.parse(t.doors_at ?? t.starts_at) - 6 * 3_600_000
@@ -31,6 +31,7 @@ export function scanTicket(eventId: number, token: string, scannerId: number, at
       ? { result: 'expired', message: 'Expired code', ticketId: t.id }
       : { result: 'invalid', message: 'Invalid code' }
   }
+  if (t.order_status === 'review') return { result: 'invalid', message: 'Order under review', ticketId: t.id }
   const r = db.prepare("UPDATE tickets SET status = 'used', scanned_at = ?, scanned_by = ? WHERE id = ? AND status = 'valid'").run(new Date(at).toISOString(), scannerId, t.id)
   if (r.changes === 1) return { result: 'valid', message: t.addon ? `Valid · ${t.addon}` : 'Valid', ticketId: t.id }
   const now2 = db.prepare('SELECT status, scanned_at FROM tickets WHERE id = ?').get(t.id) as { status: string; scanned_at: string | null }

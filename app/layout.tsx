@@ -45,6 +45,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <span>{user.email}</span>
                   <Link href="/tickets">My tickets</Link>
                   <Link href="/orders">Orders</Link>
+                  <Link href="/account">Account settings</Link>
                   <Link href="/favorites">Favorites</Link>
                   <Link href="/sell">Sell tickets</Link>
                   <Link href="/listings">My listings</Link>

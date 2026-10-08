@@ -14,6 +14,9 @@ export default async function Admin() {
         <li><Link href="/admin/users">Users</Link> ({n('SELECT count(*) AS n FROM users')})</li>
         <li><Link href="/admin/orgs">Organizations</Link> ({n("SELECT count(*) AS n FROM orgs WHERE status = 'pending'")} pending)</li>
         <li><Link href="/admin/events">Events</Link> ({n("SELECT count(*) AS n FROM events WHERE approved = 0 AND status != 'draft'")} awaiting approval)</li>
+        <li><Link href="/admin/review">Orders in review</Link> ({n("SELECT count(*) AS n FROM orders WHERE status = 'review'")})</li>
+        <li><Link href="/admin/claims">Protection claims</Link> ({n("SELECT count(*) AS n FROM claims WHERE status = 'submitted'")} open)</li>
+        <li><Link href="/admin/orders">Orders (search, refund, void)</Link></li>
         <li><Link href="/admin/refunds">Failed refunds</Link> ({n('SELECT count(*) AS n FROM orders WHERE refund_error IS NOT NULL')})</li>
         <li><Link href="/admin/fees">Fee defaults</Link></li>
         <li><Link href="/admin/taxes">City taxes</Link></li>

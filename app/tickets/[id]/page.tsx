@@ -29,7 +29,9 @@ export default async function Ticket({ params, searchParams }: { params: Promise
       {notice && <p className="notice">{notice}</p>}
       <p>{t!.venue} · {fmtDateTimeTz(t!.starts_at, t!.tz)}</p>
       <p>{t!.addon ? `${t!.addon} pass` : t!.row ? `Section ${t!.section} Row ${t!.row} Seat ${t!.number}` : `General admission ${t!.section}`} · <span className="badge">{t!.status}</span></p>
-      {t!.status === 'valid' ? <TicketQR ticketId={t!.id} secret={t!.secret} /> : <p>This ticket is {t!.status} and cannot be scanned.</p>}
+      {t!.order_status === 'review' && <p className="notice">This order is under review. The ticket cannot be scanned or transferred until it is approved.</p>}
+      {t!.status === 'valid' && t!.order_status !== 'review' ? <TicketQR ticketId={t!.id} secret={t!.secret} /> : t!.status !== 'valid' && <p>This ticket is {t!.status} and cannot be scanned.</p>}
+      {open && t!.status === 'valid' && t!.order_status === 'paid' && !t!.addon && <p><Link href={`/tickets/${id}/exchange`}>Exchange for another date</Link></p>}
       {open && t!.status === 'valid' && pending && (
         <div className="card">
           Pending transfer to {pending.to_email ?? pending.to_phone}. <Link href={`/transfers/${pending.id}`}>Details</Link>

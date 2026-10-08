@@ -53,7 +53,8 @@ export type Quote = {
   orderFee: number
   tax: number
   discount: number
-  total: number // subtotal + fees + tax - discount; fees and tax are computed on the face AFTER the promo discount
+  protection: number // opt-in ticket protection premium: protection_pct of the ticket face after the promo; not taxed, no fees; not part of subtotal
+  total: number // subtotal + fees + tax - discount + protection; fees and tax are computed on the face AFTER the promo discount
   promo?: { id: number; code: string }
   promoError?: string
 }
@@ -161,10 +162,16 @@ export const discountFor = (p: Pick<Promo, 'kind' | 'amount'>, subtotal: number)
   Math.min(p.kind === 'pct' ? Math.round((subtotal * p.amount) / 100) : p.amount, subtotal)
 
 // ---- checkout options (promo, offers, add-ons) live on the hold so quote() is reproducible at finalize and after 3DS ----
-export type Options = { promo?: string; offers?: Record<string, number>; addons?: Record<string, number> }
+export type Options = { promo?: string; offers?: Record<string, number>; addons?: Record<string, number>; protection?: boolean }
+
+// Ticket protection price as a percent of the ticket subtotal (settings.protection_pct, default 8).
+export function protectionPct(): number {
+  const s = db.prepare("SELECT value FROM settings WHERE key = 'protection_pct'").get() as { value: string } | undefined
+  return s ? Number(JSON.parse(s.value)) : 8
+}
 export const parseOptions = (s: string | null | undefined): Options => (s ? JSON.parse(s) : {})
 
-export function setCheckoutOptions(holdId: number, sessionToken: string, input: { promo: string; offers: Record<number, number>; addons: Record<number, number> }) {
+export function setCheckoutOptions(holdId: number, sessionToken: string, input: { promo: string; offers: Record<number, number>; addons: Record<number, number>; protection?: boolean }) {
   const hold = db
     .prepare("SELECT event_id FROM holds WHERE id = ? AND session_token = ? AND status = 'active' AND expires_at > ?")
     .get(holdId, sessionToken, new Date().toISOString()) as { event_id: number } | undefined
@@ -186,6 +193,7 @@ export function setCheckoutOptions(holdId: number, sessionToken: string, input: 
     if (qty > a.left) throw new UserError(a.left ? `Only ${a.left} left: ${a.name}` : `${a.name} is sold out`)
     ;(out.addons ??= {})[id] = qty
   }
+  if (input.protection) out.protection = true
   db.prepare('UPDATE holds SET options = ? WHERE id = ?').run(JSON.stringify(out), holdId)
 }
 
@@ -256,8 +264,10 @@ export function quote(holdId: number): Quote {
   const addonTax = addons.reduce((n, a) => n + a.qty * a.taxEach, 0)
   const subtotal = faceTotal + addonTotal
   const tax = p.tax + addonTax
+  // protection insures the tickets actually paid for (face after the promo); it is an insurance premium, so no fees and no tax
+  const protection = opts.protection ? Math.round(((faceTotal - discount) * protectionPct()) / 100) : 0
   return {
-    lines, addons, subtotal, fees: p.fees, orderFee: p.orderFee, tax, discount, total: subtotal + p.fees + tax - discount,
+    lines, addons, subtotal, fees: p.fees, orderFee: p.orderFee, tax, discount, protection, total: subtotal + p.fees + tax - discount + protection,
     ...(promo ? { promo: { id: promo.id, code: promo.code } } : {}),
     ...(promoError ? { promoError } : {}),
   }

@@ -4,10 +4,13 @@ import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { db } from '../lib/db.ts'
 import { allowed, clientIp, isBlocked } from '../lib/defense.ts'
+import { checkPending, pendingToken, sendOtp, verifyOtp } from '../lib/twofa.ts'
+import { checkState, PROVIDERS, socialEnabled, socialState, socialUser } from '../lib/social.ts'
+import { UserError } from '../lib/platform.ts'
 import { hashPassword, randomToken, verifyPassword } from '../lib/auth.ts'
 import { sendEmail, APP_URL } from '../lib/notify.ts'
 import { nearestCity } from '../lib/geo.ts'
-import { login } from '../lib/session.ts'
+import { ensureSession, login } from '../lib/session.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 const fail = (path: string, msg: string): never => redirect(`${path}${path.includes('?') ? '&' : '?'}error=${encodeURIComponent(msg)}`)
@@ -46,15 +49,80 @@ export async function signup(f: FormData) {
 
 export async function loginAction(f: FormData) {
   const email = field(f, 'email').toLowerCase()
-  const u = db.prepare('SELECT id, password_hash, status FROM users WHERE email = ?').get(email) as
-    | { id: number; password_hash: string | null; status: string }
+  const u = db.prepare('SELECT id, password_hash, status, twofa_enabled FROM users WHERE email = ?').get(email) as
+    | { id: number; password_hash: string | null; status: string; twofa_enabled: number }
     | undefined
   const ip = clientIp(await headers())
   // same message for unknown email / wrong password / blocked
   if (isBlocked(ip, email) || !allowed('login', ip, null, 10) || !u?.password_hash || u.status !== 'active' || !verifyPassword(String(f.get('password') ?? ''), u.password_hash)) {
     fail(`/login?next=${encodeURIComponent(nextOf(f))}`, 'Invalid email or password')
   }
+  if (u!.twofa_enabled) {
+    // password was right: nobody is logged in yet. Text a code and continue on the OTP page, bound to this browser session.
+    if (!allowed('otp-send', ip, u!.id, 5)) fail('/login', 'Too many codes requested, wait a minute')
+    const session = await ensureSession()
+    try {
+      sendOtp(u!.id)
+    } catch (e) {
+      if (e instanceof UserError) fail('/login', e.message)
+      throw e
+    }
+    redirect(`/login/otp?p=${encodeURIComponent(pendingToken(session, u!.id))}&next=${encodeURIComponent(nextOf(f))}`)
+  }
   await login(u!.id)
+  redirect(nextOf(f))
+}
+
+export async function verifyOtpAction(f: FormData) {
+  const session = await ensureSession()
+  const p = field(f, 'p')
+  const uid = checkPending(p, session)
+  if (!uid) fail('/login', 'Your login expired. Start again.')
+  const back = `/login/otp?p=${encodeURIComponent(p)}&next=${encodeURIComponent(nextOf(f))}`
+  // 10 tries a minute per IP/account on top of the 5 wrong guesses a single code allows
+  if (!allowed('otp', clientIp(await headers()), uid!, 10)) fail(back, 'Too many attempts, wait a minute')
+  const u = db.prepare('SELECT status FROM users WHERE id = ?').get(uid!) as { status: string }
+  if (u.status !== 'active' || !verifyOtp(uid!, field(f, 'code'))) fail(back, 'Invalid or expired code')
+  await login(uid!)
+  redirect(nextOf(f))
+}
+
+export async function resendOtpAction(f: FormData) {
+  const session = await ensureSession()
+  const p = field(f, 'p')
+  const uid = checkPending(p, session)
+  if (!uid) fail('/login', 'Your login expired. Start again.')
+  const back = `/login/otp?p=${encodeURIComponent(p)}&next=${encodeURIComponent(nextOf(f))}`
+  if (!allowed('otp-send', clientIp(await headers()), uid!, 5)) fail(back, 'Too many codes requested, wait a minute')
+  sendOtp(uid!)
+  redirect(`${back}&notice=${encodeURIComponent('New code sent')}`)
+}
+
+// Mock social login, step 1: the state is bound to this browser session, then the (fake) provider's consent page.
+export async function startSocial(f: FormData) {
+  const provider = field(f, 'provider')
+  if (!socialEnabled() || !PROVIDERS.includes(provider)) fail('/login', 'Social login is not available')
+  const session = await ensureSession()
+  redirect(`/auth/mock/${provider}?state=${encodeURIComponent(socialState(session, provider))}&next=${encodeURIComponent(nextOf(f))}`)
+}
+
+// Step 2: the consent form. Allow -> link by verified email or create the account, then log in (guest holds and queue place follow, see login()).
+export async function completeSocial(f: FormData) {
+  const provider = field(f, 'provider')
+  if (!socialEnabled() || !PROVIDERS.includes(provider)) fail('/login', 'Social login is not available')
+  const session = await ensureSession()
+  if (field(f, 'decision') !== 'allow') fail('/login', 'Sign-in cancelled')
+  if (!checkState(field(f, 'state'), session, provider, true)) fail('/login', 'That sign-in request is invalid or expired. Start again.')
+  const email = field(f, 'email').toLowerCase()
+  if (isBlocked(clientIp(await headers()), email)) fail('/login', 'Invalid email or password')
+  let uid = 0
+  try {
+    uid = socialUser(provider, email, field(f, 'name'), f.get('verified') === 'on')
+  } catch (e) {
+    if (e instanceof UserError) fail('/login', e.message)
+    throw e
+  }
+  await login(uid)
   redirect(nextOf(f))
 }
 

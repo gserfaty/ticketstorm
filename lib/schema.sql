@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS codes (
   kind TEXT NOT NULL CHECK (kind IN ('verify','reset','otp','vf')),
   code TEXT NOT NULL,
   expires_at TEXT NOT NULL,
-  used_at TEXT
+  used_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0 -- wrong guesses; an otp code dies after 5
 );
 CREATE INDEX IF NOT EXISTS codes_lookup ON codes(kind, code);
 
@@ -314,7 +315,9 @@ CREATE TABLE IF NOT EXISTS orders (
   promo_id INTEGER,
   delivery TEXT NOT NULL DEFAULT 'mobile',
   source TEXT,
-  refund_error TEXT, -- set when an event-cancel refund failed; order stays 'cancelled' until a retry succeeds
+  refund_error TEXT, -- set when a refund failed at the gateway; order stays 'cancelled' until a retry succeeds
+  review_reason TEXT, -- why status is 'review': fraud score, organizer hold, failed installment
+  fraud_score INTEGER,
   idempotency_key TEXT NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id);
@@ -329,7 +332,8 @@ CREATE TABLE IF NOT EXISTS order_items (
   offer_id INTEGER,
   unit_cents INTEGER NOT NULL,
   fee_cents INTEGER NOT NULL DEFAULT 0,
-  tax_cents INTEGER NOT NULL DEFAULT 0
+  tax_cents INTEGER NOT NULL DEFAULT 0,
+  refunded_cents INTEGER NOT NULL DEFAULT 0 -- >0 once this item was refunded on its own (an item can be refunded once)
 );
 CREATE INDEX IF NOT EXISTS order_items_order ON order_items(order_id);
 
@@ -358,13 +362,15 @@ CREATE TABLE IF NOT EXISTS payments (
   hold_id INTEGER REFERENCES holds(id),
   session_token TEXT,
   kind TEXT NOT NULL DEFAULT 'charge' CHECK (kind IN ('charge','refund','payout')),
-  method TEXT NOT NULL DEFAULT 'card' CHECK (method IN ('card','saved','applepay','googlepay','paypal','giftcard','installments')),
+  method TEXT NOT NULL DEFAULT 'card' CHECK (method IN ('card','saved','applepay','googlepay','paypal','giftcard','installments','exchange')),
   amount INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('succeeded','declined','requires_3ds','pending')),
   brand TEXT,
   last4 TEXT,
   decline_code TEXT,
   meta TEXT, -- JSON: contact + billing + save-card flag. Never card number or CVC.
+  parent_id INTEGER REFERENCES payments(id), -- a refund points at the charge it returns money to
+  due_at TEXT,       -- pay-in-4: when a pending installment is charged
   idempotency_key TEXT NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS payments_order ON payments(order_id);
@@ -521,4 +527,29 @@ CREATE TABLE IF NOT EXISTS blocklist (
   kind TEXT NOT NULL CHECK (kind IN ('ip','email')),
   value TEXT NOT NULL,
   UNIQUE(kind, value)
+);
+
+-- Ticket protection claims (P9)
+CREATE TABLE IF NOT EXISTS claims (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  order_id INTEGER NOT NULL REFERENCES orders(id),
+  reason TEXT NOT NULL,
+  details TEXT,
+  status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted','approved','denied')),
+  decided_by INTEGER REFERENCES users(id),
+  decided_at TEXT
+);
+-- one open or approved claim per order
+CREATE UNIQUE INDEX IF NOT EXISTS one_live_claim ON claims(order_id) WHERE status IN ('submitted','approved');
+
+-- Ticket exchanges: old ticket -> a seat at another date of the same series (P9)
+CREATE TABLE IF NOT EXISTS exchanges (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  from_ticket INTEGER NOT NULL REFERENCES tickets(id),
+  to_inventory INTEGER NOT NULL REFERENCES inventory(id),
+  from_order INTEGER NOT NULL REFERENCES orders(id),
+  to_order INTEGER NOT NULL REFERENCES orders(id),
+  diff_cents INTEGER NOT NULL
 );

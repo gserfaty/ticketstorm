@@ -26,7 +26,7 @@ export function assertTicketLimit(userId: number | null, eventId: number, qty: n
   if (!userId && !email) return
   const limit = (db.prepare('SELECT ticket_limit FROM events WHERE id = ?').get(eventId) as { ticket_limit: number }).ticket_limit
   const paid = (db
-    .prepare("SELECT count(*) AS n FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE (o.user_id = ? OR lower(o.email) = lower(?)) AND o.event_id = ? AND o.status IN ('paid','review','partially_refunded') AND oi.kind = 'ticket'")
+    .prepare("SELECT count(*) AS n FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE (o.user_id = ? OR lower(o.email) = lower(?)) AND o.event_id = ? AND o.status IN ('paid','review','partially_refunded') AND oi.kind = 'ticket' AND coalesce(o.source, '') != 'comp'")
     .get(userId, email ?? '', eventId) as { n: number }).n
   const held = !userId ? 0 : (db
     .prepare("SELECT count(*) AS n FROM inventory i JOIN holds h ON h.id = i.hold_id WHERE h.user_id = ? AND h.event_id = ? AND i.event_id = h.event_id AND h.status = 'active' AND h.expires_at > ? AND h.session_token != ? AND i.status = 'held'")

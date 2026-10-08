@@ -2,7 +2,10 @@
 
 import { redirect } from 'next/navigation'
 import { db, tx } from '../../lib/db.ts'
-import { refundEvent } from '../../lib/orders.ts'
+import { approveReview, holdOrder } from '../../lib/fraud.ts'
+import { refundFromForm } from '../../lib/orderadmin.ts'
+import { refundEvent, refundOrder, sendConfirmation } from '../../lib/orders.ts'
+import { decideClaim } from '../../lib/protection.ts'
 import { audit, setFlag, UserError } from '../../lib/platform.ts'
 import { setCityTax, setFeeDefaults } from '../../lib/pricing.ts'
 import { requireAdmin } from '../../lib/session.ts'
@@ -106,4 +109,80 @@ export async function retryRefunds(f: FormData) {
   const r = refundEvent(id)
   audit(admin.id, 'refund.retry', `event:${id}`, r)
   done('/admin/refunds', `${r.refunded} refunded, ${r.failed} still failing`)
+}
+
+// ---- P9: review queue, claims, order tools ----
+// Run a mutation and bounce back with a notice, or with the message of a UserError.
+function run(back: string, fn: () => void, ok: string): never {
+  try {
+    fn()
+  } catch (e) {
+    if (e instanceof UserError) return refuse(back, e.message)
+    throw e
+  }
+  return done(back, ok)
+}
+
+export async function reviewApprove(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'orderId')
+  run('/admin/review', () => {
+    if (!approveReview(id)) throw new UserError('That order is not in review')
+    audit(admin.id, 'order.approve', `order:${id}`)
+  }, 'Approved: the tickets work now')
+}
+
+// Cancel = refund what was paid through the shared refund function and put the seats back on sale.
+export async function reviewCancel(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'orderId')
+  run('/admin/review', () => {
+    if (!db.prepare("SELECT 1 FROM orders WHERE id = ? AND status = 'review'").get(id)) throw new UserError('That order is not in review')
+    const r = refundOrder(id, { reason: 'review_cancelled' })
+    audit(admin.id, 'order.review_cancel', `order:${id}`, r)
+  }, 'Cancelled and refunded')
+}
+
+export async function claimDecision(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'claimId')
+  const approve = text(f, 'decision') === 'approve'
+  run('/admin/claims', () => {
+    decideClaim(id, admin.id, approve)
+    audit(admin.id, approve ? 'claim.approve' : 'claim.deny', `claim:${id}`)
+  }, approve ? 'Approved and refunded' : 'Denied')
+}
+
+export async function adminOrderRefund(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'orderId')
+  const mode = text(f, 'mode')
+  run('/admin/orders', () => {
+    const r = refundFromForm(id, mode, f.getAll('item').map(Number), f.get('fees') === 'on', `admin:${admin.id}`)
+    audit(admin.id, `order.${mode === 'void' ? 'void' : 'refund'}`, `order:${id}`, { mode, items: f.getAll('item'), amount: r.amount })
+  }, 'Done')
+}
+
+export async function adminOrderResend(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'orderId')
+  run('/admin/orders', () => { sendConfirmation(id); audit(admin.id, 'order.resend', `order:${id}`) }, 'Tickets re-sent')
+}
+
+export async function adminOrderHold(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'orderId')
+  run('/admin/orders', () => {
+    if (!tx(() => holdOrder(id, 'admin_hold'))) throw new UserError('Only a paid order can be held')
+    audit(admin.id, 'order.hold', `order:${id}`)
+  }, 'Order held')
+}
+
+export async function adminOrderRelease(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'orderId')
+  run('/admin/orders', () => {
+    if (!approveReview(id)) throw new UserError('That order is not in review')
+    audit(admin.id, 'order.release', `order:${id}`)
+  }, 'Released')
 }

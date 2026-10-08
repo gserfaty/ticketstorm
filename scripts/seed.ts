@@ -10,6 +10,8 @@ import { createListing } from '../lib/resale.ts'
 import { localToUtc, slugify } from '../lib/format.ts'
 import type { VenueKind } from '../lib/venue-gen.ts'
 
+process.env.FRAUD_RANDOM_PCT = '0' // the seed's own orders must not land in review by chance; scripted review cases are below
+
 if (db.prepare('SELECT count(*) AS n FROM users').get()!.n) {
   console.log('Already seeded. Run `npm run reset` to start over.')
   process.exit(0)
@@ -208,6 +210,8 @@ tx(() => {
     ['neon-harbor-empire-wednesday', 0, dayAhead(3), 'published', -10],
     ['neon-harbor-empire-cancelled', 0, dayAhead(5), 'cancelled', -10],
     ['neon-harbor-empire-onsale-soon', 0, dayAhead(5) + 7 * DAY, 'published', 3],
+    // P9: moved to a new date; every ticket holder can ask for a refund for the next 7 days
+    ['neon-harbor-empire-rescheduled', 0, today + 26 * DAY, 'rescheduled', -10],
   ]
   for (const [slug, vi, day, status, onsaleOff] of fixed) {
     const v = venueRows[vi]
@@ -221,6 +225,7 @@ tx(() => {
         new Date(today + onsaleOff * DAY).toISOString(), 90).lastInsertRowid)
     insBill.run(id, fixedArtist.id, 0)
     addLevels(id, 50, v.kind)
+    if (status === 'rescheduled') db.prepare('UPDATE events SET refund_window_until = ? WHERE id = ?').run(new Date(now.getTime() + 7 * DAY).toISOString(), id)
   }
 
   // P7. A high-demand show with a waiting room that opens in 2 minutes and admits only 6 a minute.
@@ -344,5 +349,24 @@ heldBack('neon-harbor-catskill-saturday', vf)
   const t = db.prepare('SELECT id FROM tickets WHERE owner_id = ?').get(fan2.id) as { id: number }
   createListing(fan2.id, t.id, 12500)
 }
+
+// P9: a fan order on the rescheduled event (refund button visible until its window closes), and an order the fraud score put in review.
+{
+  const ev = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-empire-rescheduled'").get() as { id: number }
+  const user = (email: string) => db.prepare('SELECT id, email FROM users WHERE email = ?').get(email) as { id: number; email: string }
+  const buy = (email: string, name: string, key: string, qty: number, level?: string) => {
+    const u = user(email)
+    const owner = { sessionToken: `${key}-session`, userId: u.id }
+    const levelId = level ? (db.prepare('SELECT id FROM price_levels WHERE event_id = ? AND name = ?').get(ev.id, level) as { id: number }).id : undefined
+    const held = holdBestAvailable(ev.id, owner, qty, levelId)
+    finalize({ holdId: held.holdId, sessionToken: owner.sessionToken, userId: u.id, email: u.email, key, method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false, billing: { name, address: '1 Main St', city: 'New York', zip: '10001' } })
+  }
+  buy('fan@ticketstorm.test', 'Frankie Fan', 'seed-fan-order-2', 2)
+  // 5 Premium seats: $500+ face on a brand-new account scores 60, over the review threshold of 50
+  buy('fan2@ticketstorm.test', 'Fiona Fan', 'seed-fan2-order-2', 5, 'Premium')
+  const status = (db.prepare("SELECT status FROM orders WHERE idempotency_key = 'seed-fan2-order-2'").get() as { status: string }).status
+  if (status !== 'review') throw new Error(`seed: expected the Premium order to be in review, got ${status}`)
+}
+db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct', '8')").run()
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

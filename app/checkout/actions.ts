@@ -10,6 +10,7 @@ import { UserError } from '../../lib/platform.ts'
 import { setCheckoutOptions } from '../../lib/pricing.ts'
 import { approve3ds, fail3ds, finalize } from '../../lib/orders.ts'
 import { brandOf, validateCard } from '../../lib/payments.ts'
+import type { Method } from '../../lib/payments.ts'
 import { getSession, getUser } from '../../lib/session.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
@@ -21,6 +22,7 @@ const DECLINES: Record<string, string> = {
   insufficient_funds: 'Insufficient funds. Try another card.',
   '3ds_failed': 'Authentication failed. Try again or use another card.',
   hold_expired: 'Your hold expired.',
+  paypal_cancelled: 'PayPal payment cancelled.',
 }
 
 export async function pay(_: PayState, f: FormData): Promise<PayState> {
@@ -43,12 +45,21 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
   const billing = { name: field(f, 'bname'), address: field(f, 'baddress'), city: field(f, 'bcity'), zip: field(f, 'bzip') }
   if (Object.values(billing).some((v) => !v)) return bad('Fill in the billing address')
 
-  let method: 'card' | 'saved' = 'card'
+  if (f.get('policy') !== 'on') return bad('Accept the refund policy to continue')
+  const chosen = field(f, 'method')
+  let method: Method = 'card'
   let brand = ''
   let last4 = ''
   let exp = ''
   const savedId = field(f, 'saved')
-  if (savedId) {
+  if (chosen === 'applepay' || chosen === 'googlepay') {
+    // simulated wallet: no token reaches the server; it is charged as the test Visa 4242
+    method = chosen
+    ;[brand, last4, exp] = ['Visa', '4242', '12/39']
+  } else if (chosen === 'paypal') {
+    method = 'paypal'
+    brand = 'PayPal'
+  } else if (savedId) {
     const c = user && (db.prepare('SELECT brand, last4, exp FROM saved_cards WHERE id = ? AND user_id = ?').get(Number(savedId), user.id) as { brand: string; last4: string; exp: string } | undefined)
     if (!c) return bad('Saved card not found')
     method = 'saved'
@@ -65,13 +76,14 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
 
   let r
   try {
-    r = finalize({ holdId, sessionToken: session.token, userId: user?.id ?? null, email, key, method, brand, last4, exp, save: !!user && f.get('save') === 'on', billing })
+    r = finalize({ holdId, sessionToken: session.token, userId: user?.id ?? null, email, key, method, installments: f.get('installments') === 'on', brand, last4, exp, save: !!user && f.get('save') === 'on' && method === 'card', billing })
   } catch (e) {
     if (e instanceof HoldError) return e.status === 410 ? back(holdId, e.message) : bad(e.message)
     throw e
   }
   if ('orderId' in r) redirect(`/orders/${r.orderId}`)
   if ('threeDs' in r) redirect(`/checkout/3ds/${r.threeDs}`)
+  if ('paypal' in r) redirect(`/checkout/paypal/${r.paypal}`)
   return bad(DECLINES[r.declined] ?? 'Payment declined')
 }
 
@@ -89,7 +101,7 @@ export async function applyOptions(f: FormData) {
   const promo = field(f, 'promo')
   if (promo && !allowed('promo', clientIp(await headers()), (await getUser())?.id ?? null, 10)) back(holdId, 'Too many attempts, wait a minute')
   try {
-    setCheckoutOptions(holdId, session!.token, { promo: field(f, 'promo'), offers, addons })
+    setCheckoutOptions(holdId, session!.token, { promo: field(f, 'promo'), offers, addons, protection: f.get('protection') === 'on' })
   } catch (e) {
     if (e instanceof UserError) back(holdId, e.message)
     throw e
@@ -102,9 +114,9 @@ export async function threeDs(f: FormData) {
   const id = Number(field(f, 'paymentId'))
   if (!session || !Number.isInteger(id)) redirect('/')
   if (field(f, 'result') === 'fail') {
-    const holdId = fail3ds(id, session!.token)
+    const holdId = fail3ds(id, session!.token, field(f, 'provider') === 'paypal' ? 'paypal_cancelled' : '3ds_failed')
     if (!holdId) redirect('/')
-    back(holdId!, DECLINES['3ds_failed'])
+    back(holdId!, DECLINES[field(f, 'provider') === 'paypal' ? 'paypal_cancelled' : '3ds_failed'])
   }
   try {
     const r = approve3ds(id, session!.token)

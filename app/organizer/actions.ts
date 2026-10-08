@@ -1,10 +1,12 @@
 'use server'
 
 import { notFound, redirect } from 'next/navigation'
-import { db } from '../../lib/db.ts'
+import { db, tx } from '../../lib/db.ts'
 import * as access from '../../lib/access.ts'
 import { parseLocal } from '../../lib/format.ts'
-import { refundEvent } from '../../lib/orders.ts'
+import { holdOrder, approveReview } from '../../lib/fraud.ts'
+import { refundEvent, sendConfirmation } from '../../lib/orders.ts'
+import { compTickets, moveSeat, ORDER_ROLES, refundFromForm } from '../../lib/orderadmin.ts'
 import * as org from '../../lib/organizer.ts'
 import { audit, UserError } from '../../lib/platform.ts'
 import { requireOrgRole, requireUser } from '../../lib/session.ts'
@@ -31,7 +33,7 @@ async function authEvent(f: FormData, roles = MANAGE) {
     | undefined
   if (!e) notFound()
   const { user } = await requireOrgRole(e!.org_id, roles)
-  const sub = ['pricing', 'inventory', 'access', 'queue'].includes(text(f, 'page')) ? `/${text(f, 'page')}` : ''
+  const sub = ['pricing', 'inventory', 'access', 'queue', 'orders'].includes(text(f, 'page')) ? `/${text(f, 'page')}` : ''
   return { ...e!, user, back: `/organizer/${e!.org_id}/events/${e!.id}${sub}` }
 }
 
@@ -264,4 +266,68 @@ export async function saveQueueAction(f: FormData) {
     access.setQueue(e.id, on, num(f, 'rate'), num(f, 'cap'))
     audit(e.user.id, 'queue.set', `event:${e.id}`, { on, rate: num(f, 'rate'), cap: num(f, 'cap') })
   })
+}
+
+// ---- orders of an event (box office tools) ----
+// The order is loaded first and the actor is checked against the org that owns ITS event; nothing from the form is trusted for scoping.
+async function authOrder(f: FormData) {
+  const o = db.prepare('SELECT o.id, o.event_id, o.status, e.org_id FROM orders o JOIN events e ON e.id = o.event_id WHERE o.id = ?').get(num(f, 'orderId')) as
+    | { id: number; event_id: number; status: string; org_id: number }
+    | undefined
+  if (!o) notFound()
+  const { user } = await requireOrgRole(o!.org_id, ORDER_ROLES)
+  return { ...o!, user, back: `/organizer/${o!.org_id}/events/${o!.event_id}/orders` }
+}
+
+export async function orderRefund(f: FormData) {
+  const o = await authOrder(f)
+  const mode = text(f, 'mode')
+  run(o.back, () => {
+    const r = refundFromForm(o.id, mode, f.getAll('item').map(Number), f.get('fees') === 'on', `organizer:${o.user.id}`)
+    audit(o.user.id, `order.${mode === 'void' ? 'void' : 'refund'}`, `order:${o.id}`, { mode, items: f.getAll('item'), fees: f.get('fees') === 'on', amount: r.amount })
+  }, 'Done')
+}
+
+export async function orderResend(f: FormData) {
+  const o = await authOrder(f)
+  run(o.back, () => { sendConfirmation(o.id); audit(o.user.id, 'order.resend', `order:${o.id}`) }, 'Tickets re-sent')
+}
+
+export async function orderHold(f: FormData) {
+  const o = await authOrder(f)
+  run(o.back, () => {
+    if (!tx(() => holdOrder(o.id, 'organizer_hold'))) throw new UserError('Only a paid order can be held')
+    audit(o.user.id, 'order.hold', `order:${o.id}`)
+  }, 'Order held: its tickets stop working until released')
+}
+
+// An organizer can lift its own hold; a fraud-score hold stays with the admin review queue.
+export async function orderRelease(f: FormData) {
+  const o = await authOrder(f)
+  run(o.back, () => {
+    if (!approveReview(o.id, 'organizer_hold')) throw new UserError('Only holds placed by an organizer can be released here; the rest go through admin review')
+    audit(o.user.id, 'order.release', `order:${o.id}`)
+  }, 'Hold released')
+}
+
+export async function orderMove(f: FormData) {
+  const o = await authOrder(f)
+  run(o.back, () => {
+    const t = db
+      .prepare("SELECT t.id FROM tickets t JOIN order_items oi ON oi.order_id = t.order_id AND oi.inventory_id = t.inventory_id WHERE oi.id = ? AND oi.order_id = ? AND t.status = 'valid'")
+      .get(num(f, 'itemId'), o.id) as { id: number } | undefined
+    if (!t) throw new UserError('Only a valid ticket can be moved')
+    const id = moveSeat(o.id, t.id, { section: text(f, 'section'), row: text(f, 'row'), number: text(f, 'number') ? num(f, 'number') : null })
+    audit(o.user.id, 'order.move_seat', `order:${o.id}`, { ticket: t.id, newTicket: id })
+  }, 'Seat moved; the old QR code no longer works')
+}
+
+export async function orderComp(f: FormData) {
+  const e = await authEvent(f, ORDER_ROLES)
+  run(`/organizer/${e.org_id}/events/${e.id}/orders`, () => {
+    // one seat per line: "Section" for general admission or "Section, Row, Seat"
+    const seats = text(f, 'seats').split('\n').map((l) => l.split(',').map((x) => x.trim())).filter((p) => p[0]).map(([section, row = '', number = '']) => ({ section, row, number: number ? Number(number) : null }))
+    const id = compTickets(e.id, text(f, 'email'), seats, text(f, 'note'))
+    audit(e.user.id, 'order.comp', `order:${id}`, { event: e.id, email: text(f, 'email'), seats: seats.length })
+  }, 'Complimentary tickets sent')
 }

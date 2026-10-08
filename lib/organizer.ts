@@ -96,7 +96,9 @@ export function changeDate(eventId: number, kind: 'postponed' | 'rescheduled', n
       if (doors) doors = new Date(Date.parse(doors) + Date.parse(newStart) - Date.parse(ev.starts_at)).toISOString()
       starts = newStart
     } else if (ev.status === 'postponed') return
-    db.prepare('UPDATE events SET status = ?, starts_at = ?, doors_at = ? WHERE id = ?').run(kind, starts, doors, eventId)
+    // a new date opens a 14-day window (never past the new show) in which any ticket holder can ask for a refund
+    const window = kind === 'rescheduled' ? new Date(Math.min(Date.now() + 14 * 86_400_000, Date.parse(starts))).toISOString() : null
+    db.prepare('UPDATE events SET status = ?, starts_at = ?, doors_at = ?, refund_window_until = coalesce(?, refund_window_until) WHERE id = ?').run(kind, starts, doors, window, eventId)
     const { tz } = ev
     const when = kind === 'rescheduled' ? `new date: ${fmtDateTimeTz(starts, tz)}` : 'new date to be announced'
     const holders = db

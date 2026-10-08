@@ -29,7 +29,7 @@ function secret(): string {
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('captcha_secret', ?)").run(JSON.stringify(randomBytes(32).toString('hex')))
   return JSON.parse((db.prepare("SELECT value FROM settings WHERE key = 'captcha_secret'").get() as { value: string }).value)
 }
-const mac = (data: string) => createHmac('sha256', secret()).update(data).digest()
+export const mac = (data: string) => createHmac('sha256', secret()).update(data).digest()
 const sum = (nonce: string): [number, number] => {
   const m = mac('q' + nonce)
   return [(m[0] % 9) + 2, (m[1] % 9) + 2]

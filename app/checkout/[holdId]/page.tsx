@@ -4,7 +4,8 @@ import { db } from '../../../lib/db.ts'
 import { newCaptcha } from '../../../lib/defense.ts'
 import { liveHold } from '../../../lib/orders.ts'
 import { listSavedCards } from '../../../lib/payments.ts'
-import { parseOptions, quote } from '../../../lib/pricing.ts'
+import { parseOptions, protectionPct, quote } from '../../../lib/pricing.ts'
+import { plan } from '../../../lib/installments.ts'
 import { money, fmtDateTimeTz } from '../../../lib/format.ts'
 import { getSession, getUser } from '../../../lib/session.ts'
 import PayForm from '../../../components/PayForm.tsx'
@@ -35,6 +36,9 @@ export default async function Checkout({ params, searchParams }: { params: Promi
   const addons = resale ? [] : (db.prepare('SELECT id, kind, name, price_cents, inventory - sold AS left FROM addons WHERE event_id = ? ORDER BY id').all(hold.event_id) as { id: number; kind: string; name: string; price_cents: number; left: number }[])
   const opts = parseOptions((db.prepare('SELECT options FROM holds WHERE id = ?').get(hold.id) as { options: string | null }).options)
   const user = await getUser()
+  const face = q.lines.reduce((n, l) => n + (l.eventId === hold.event_id ? l.unit : 0), 0)
+  const premium = resale ? 0 : Math.round(((face - q.discount) * protectionPct()) / 100)
+  const parts = user ? plan(q.total, ev.starts_at) : null // pay in 4 is for accounts only
   return (
     <>
       <h1>Checkout</h1>
@@ -54,6 +58,7 @@ export default async function Checkout({ params, searchParams }: { params: Promi
             <tr><td>Order processing and delivery</td><td>{money(q.orderFee)}</td></tr>
             <tr><td>Tax</td><td>{money(q.tax)}</td></tr>
             {q.discount > 0 && <tr><td>Promo {q.promo?.code}</td><td>-{money(q.discount)}</td></tr>}
+            {q.protection > 0 && <tr><td>Ticket protection (not taxed)</td><td>{money(q.protection)}</td></tr>}
             <tr><td><strong>Total</strong></td><td><strong>{money(q.total)}</strong></td></tr>
           </tbody>
         </table>
@@ -75,13 +80,14 @@ export default async function Checkout({ params, searchParams }: { params: Promi
               <input name={`addon-${a.id}`} type="number" min={0} max={Math.min(a.left, 8)} defaultValue={Math.min(opts.addons?.[a.id] ?? 0, a.left)} disabled={!a.left} />
             </label>
           ))}
+          {premium > 0 && <label><input type="checkbox" name="protection" defaultChecked={!!opts.protection} /> Add ticket protection: {protectionPct()}% of the tickets ({money(premium)}), not taxed. Lets you claim a refund if you cannot go.</label>}
           <button>Update order</button>
         </form>
       )}
       {notice && <p className="notice">{notice}</p>}
       {q.promoError && <p className="error">{q.promoError}. Clear the promo code and update the order to continue.</p>}
       {error && <p className="error">{error}</p>}
-      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={user ? listSavedCards(user.id) : []} canSave={!!user} total={money(q.total)} captcha={newCaptcha()} />
+      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={user ? listSavedCards(user.id) : []} canSave={!!user} total={money(q.total)} totalCents={q.total} installments={parts?.map((p) => money(p.amount)) ?? null} captcha={newCaptcha()} />
       <p><Link href={`/events/${ev.slug}/tickets`}>Back to seat map</Link></p>
     </>
   )

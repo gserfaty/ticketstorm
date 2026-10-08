@@ -98,7 +98,7 @@ export async function login(userId: number) {
   // carry the guest session's in-progress rows over, or logging in mid-checkout loses the hold
   if (old) tx(() => {
     db.prepare("UPDATE holds SET session_token = ?, user_id = ? WHERE session_token = ? AND status = 'active'").run(token, userId, old)
-    db.prepare("UPDATE payments SET session_token = ? WHERE session_token = ? AND status = 'requires_3ds'").run(token, old)
+    db.prepare("UPDATE payments SET session_token = ? WHERE session_token = ? AND status IN ('requires_3ds','pending') AND order_id IS NULL").run(token, old)
     db.prepare('UPDATE orders SET session_token = ? WHERE session_token = ? AND user_id IS NULL').run(token, old)
     // waiting-room place and unlocked presales follow the shopper through login
     db.prepare('UPDATE queue_entries SET session_token = ?, user_id = ? WHERE session_token = ?').run(token, userId, old)

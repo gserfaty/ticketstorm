@@ -12,7 +12,7 @@
     "seed": "node scripts/seed.ts",
     "reset": "rm -f data/ticketstorm.db* && node scripts/seed.ts",
     "jobs": "node scripts/jobs.ts",
-    "test": "node --test \"tests/**/*.test.ts\"",
+    "test": "FRAUD_RANDOM_PCT=0 node --test \"tests/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
