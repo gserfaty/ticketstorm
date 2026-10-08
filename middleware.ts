@@ -6,6 +6,8 @@ import type { NextRequest } from 'next/server'
 export function middleware(req: NextRequest) {
   const src = req.nextUrl.searchParams.get('src')?.toLowerCase()
   const res = NextResponse.next()
+  // visitor id for A/B bucketing: random, no personal data, one year
+  if (!req.cookies.get('ab')) res.cookies.set('ab', crypto.randomUUID(), { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 365 * 86_400 })
   if (src && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(src)) res.cookies.set('src', src, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 30 * 86_400 })
   return res
 }

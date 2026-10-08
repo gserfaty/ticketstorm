@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { fmtDateTimeTz, money } from '../../../../../../lib/format.ts'
 import { REPORT_ROLES } from '../../../../../../lib/organizer.ts'
+import { funnel } from '../../../../../../lib/analytics.ts'
 import { eventReport } from '../../../../../../lib/reports.ts'
 import { loadEvent } from '../../../../guard.ts'
 
@@ -27,6 +28,8 @@ export default async function Reports({ params }: { params: Promise<{ orgId: str
   const { e } = await loadEvent(orgId, id, REPORT_ROLES)
   const r = eventReport(e.id, e.tz)
   const base = `/organizer/${orgId}/events/${e.id}`
+  const f = funnel(e.id)
+  const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : 'n/a')
   return (
     <>
       <h1>Reports: {e.title}</h1>
@@ -44,6 +47,9 @@ export default async function Reports({ params }: { params: Promise<{ orgId: str
         </tbody>
       </table>
       <p className="muted">Resale between fans is not part of these figures. Net = face value after promos, minus refunds paid on live orders.</p>
+      <h2>Funnel</h2>
+      <p className="muted">Counts only, nothing about who: event page views, seat holds started, orders placed.</p>
+      <Bars title="Funnel from event page views to orders" rows={[{ label: 'Event views', value: f.view, text: String(f.view) }, { label: 'Holds', value: f.hold, text: `${f.hold} (${pct(f.hold, f.view)} of views)` }, { label: 'Orders', value: f.order, text: `${f.order} (${pct(f.order, f.hold)} of holds)` }]} />
       <h2>Sold by price level</h2>
       {r.byLevel.length ? <Bars title="Tickets sold by price level" rows={r.byLevel.map((l) => ({ label: l.level, value: l.sold, text: `${l.sold} · ${money(l.revenue)}` }))} /> : <p>No sales yet.</p>}
       <h2>Sold by day</h2>

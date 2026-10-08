@@ -7,7 +7,8 @@ import { listSavedCards } from '../../../lib/payments.ts'
 import { parseOptions, protectionPct, quote } from '../../../lib/pricing.ts'
 import { plan } from '../../../lib/installments.ts'
 import { money, fmtDateTimeTz } from '../../../lib/format.ts'
-import { currencyPref, getSession, getUser } from '../../../lib/session.ts'
+import { checkoutLabels, t } from '../../../lib/i18n.ts'
+import { currencyPref, getSession, getUser, langPref } from '../../../lib/session.ts'
 import { approx, displayCurrency } from '../../../lib/currency.ts'
 import { creditBalance } from '../../../lib/stored.ts'
 import { addressOf } from '../../../lib/account.ts'
@@ -20,6 +21,7 @@ import { redirect } from 'next/navigation'
 export const dynamic = 'force-dynamic'
 
 export default async function Checkout({ params, searchParams }: { params: Promise<{ holdId: string }>; searchParams: Promise<{ error?: string; notice?: string }> }) {
+  const lang = await langPref()
   const holdId = Number((await params).holdId)
   const { error, notice } = await searchParams
   const session = await getSession()
@@ -58,7 +60,7 @@ export default async function Checkout({ params, searchParams }: { params: Promi
   const parts = user ? plan(q.total, ev.starts_at) : null // pay in 4 is for accounts only
   return (
     <>
-      <h1>Checkout</h1>
+      <h1>{t(lang, 'co.title')}</h1>
       {cur !== 'USD' && <p className="muted">Your card is charged in USD ({money(q.total)}). {cur} amounts use a fixed demo rate and are approximate.</p>}
       <div className="card">
         <strong>{ev.title}</strong>
@@ -77,7 +79,7 @@ export default async function Checkout({ params, searchParams }: { params: Promi
             <tr><td>{ev.country === 'US' ? 'Tax' : 'Local tax (VAT/GST/HST, international)'}</td><td>{money(q.tax)}</td></tr>
             {q.discount > 0 && <tr><td>Promo {q.promo?.code}</td><td>-{money(q.discount)}</td></tr>}
             {q.protection > 0 && <tr><td>Ticket protection (not taxed)</td><td>{money(q.protection)}</td></tr>}
-            <tr><td><strong>Total</strong></td><td><strong>{money(q.total)}</strong></td></tr>
+            <tr><td><strong>{t(lang, 'co.total')}</strong></td><td><strong>{money(q.total)}</strong></td></tr>
             {cur !== 'USD' && <tr><td className="muted">In {cur} (approximate)</td><td className="muted">{approx(q.total, cur)}</td></tr>}
           </tbody>
         </table>
@@ -88,7 +90,7 @@ export default async function Checkout({ params, searchParams }: { params: Promi
       {!resale && (
         <form action={applyOptions} className="card stack">
           <input type="hidden" name="holdId" value={hold.id} />
-          <label>Promo code <input name="promo" defaultValue={opts.promo ?? ''} placeholder="e.g. STORM10" autoComplete="off" /></label>
+          <label>{t(lang, 'co.promo')} <input name="promo" defaultValue={opts.promo ?? ''} placeholder="e.g. STORM10" autoComplete="off" /></label>
           {offers.length > 0 && q.lines.filter((l) => l.eventId === hold.event_id).map((l) => (
             <label key={l.inventoryId}>{l.label}
               <select name={`offer-${l.inventoryId}`} defaultValue={l.offerId ?? 0}>
@@ -103,14 +105,14 @@ export default async function Checkout({ params, searchParams }: { params: Promi
             </label>
           ))}
           {premium > 0 && <label><input type="checkbox" name="protection" defaultChecked={!!opts.protection} /> Add ticket protection: {protectionPct()}% of the tickets ({money(premium)}), not taxed. Lets you claim a refund if you cannot go.</label>}
-          <button>Update order</button>
+          <button>{t(lang, 'co.update')}</button>
         </form>
       )}
       {notice && <p className="notice">{notice}</p>}
       {q.promoError && <p className="error">{q.promoError}. Clear the promo code and update the order to continue.</p>}
       {error && <p className="error">{error}</p>}
-      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={cards} canSave={!!user} total={money(q.total)} totalCents={q.total} installments={parts?.map((p) => money(p.amount)) ?? null} captcha={newCaptcha()} deliveries={deliveries} prefill={prefill} express={express} creditCents={user ? creditBalance(user.id) : 0} />
-      <p><Link href={`/events/${ev.slug}/tickets`}>Back to seat map</Link></p>
+      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={cards} canSave={!!user} total={money(q.total)} totalCents={q.total} installments={parts?.map((p) => money(p.amount)) ?? null} captcha={newCaptcha()} deliveries={deliveries} prefill={prefill} express={express} creditCents={user ? creditBalance(user.id) : 0} labels={checkoutLabels(lang)} />
+      <p><Link href={`/events/${ev.slug}/tickets`}>{t(lang, 'co.back')}</Link></p>
     </>
   )
 }

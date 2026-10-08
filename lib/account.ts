@@ -107,23 +107,29 @@ export function exportData(userId: number): Row {
     price_alerts: all('SELECT event_id, target_cents, created_at FROM price_alerts WHERE user_id = ?', userId),
     linked_logins: all('SELECT provider, created_at FROM oauth_links WHERE user_id = ?', userId),
     ledger: all('SELECT kind, amount, ref, created_at FROM ledger WHERE account = ?', `user:${userId}`),
+    account_credit: all('SELECT amount, ref, created_at FROM credits WHERE user_id = ?', userId),
+    gift_cards_bought: all('SELECT id, last4, initial_cents, balance_cents, recipient_email, created_at FROM gift_cards WHERE purchaser_id = ?', userId),
+    resale_offers: all('SELECT id, listing_id, price_cents, status, created_at FROM resale_offers WHERE buyer_id = ?', userId),
+    reviews: all('SELECT event_id, venue_id, rating, body, status, created_at FROM reviews WHERE user_id = ?', userId),
   }
 }
 
 // Delete = anonymize. The row stays so orders, tickets and ledger entries keep their foreign keys; every personal field goes, sessions die,
-// and open listings / transfers are cancelled. `confirm` is the password (or the email for accounts that only use social login).
-export function deleteAccount(userId: number, confirm: string) {
+// and open listings / transfers / offers are cancelled. `confirm` is the password (or the email for accounts that only use social login); the
+// admin GDPR tool passes null (the admin acts on a request and is audited). Admin accounts can never be erased, by themselves or by another admin.
+export function deleteAccount(userId: number, confirm: string | null) {
   tx(() => {
     const u = db.prepare('SELECT email, password_hash, role, status FROM users WHERE id = ?').get(userId) as { email: string; password_hash: string | null; role: string; status: string }
     if (u.status === 'deleted') throw new UserError('Account already deleted')
-    if (u.password_hash ? !verifyPassword(confirm, u.password_hash) : confirm.trim().toLowerCase() !== u.email) throw new UserError(u.password_hash ? 'Wrong password' : 'Type your email address to confirm')
-    if (u.role === 'admin') throw new UserError('Admins cannot delete their own account')
+    if (confirm !== null && (u.password_hash ? !verifyPassword(confirm, u.password_hash) : confirm.trim().toLowerCase() !== u.email)) throw new UserError(u.password_hash ? 'Wrong password' : 'Type your email address to confirm')
+    if (u.role === 'admin') throw new UserError('Admin accounts cannot be deleted or erased')
     if (db.prepare('SELECT 1 FROM org_members WHERE user_id = ?').get(userId)) throw new UserError('Leave your organizations first')
     if (db.prepare("SELECT 1 FROM payments p JOIN orders o ON o.id = p.order_id WHERE o.user_id = ? AND p.status = 'pending'").get(userId)) throw new UserError('Finish paying your pay-in-4 orders first')
     for (const l of db.prepare("UPDATE listings SET status = 'cancelled', hold_id = NULL, held_until = NULL WHERE seller_id = ? AND status = 'active' RETURNING ticket_id").all(userId) as { ticket_id: number }[]) {
       db.prepare("UPDATE tickets SET status = 'valid' WHERE id = ? AND status = 'listed'").run(l.ticket_id)
     }
     db.prepare("UPDATE transfers SET status = 'cancelled' WHERE from_user = ? AND status = 'pending'").run(userId)
+    db.prepare("UPDATE resale_offers SET status = 'withdrawn' WHERE buyer_id = ? AND status = 'pending'").run(userId)
     const gone = `deleted-${userId}@deleted.invalid`
     db.prepare("UPDATE users SET email = ?, name = '', phone = NULL, address = NULL, notif_prefs = NULL, password_hash = NULL, twofa_enabled = 0, home_city_id = NULL, status = 'deleted' WHERE id = ?").run(gone, userId)
     db.prepare('UPDATE orders SET email = ? WHERE user_id = ?').run(gone, userId)

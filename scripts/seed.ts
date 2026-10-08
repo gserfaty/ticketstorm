@@ -10,6 +10,7 @@ import { createListing } from '../lib/resale.ts'
 import { makeOffer } from '../lib/offers.ts'
 import { purchaseGift, redeemToCredit } from '../lib/giftcards.ts'
 import { createHash } from 'node:crypto'
+import { logEvent } from '../lib/analytics.ts'
 import { addWebhook } from '../lib/devtools.ts'
 import { decideReview, submitReview } from '../lib/reviews.ts'
 import { settleEvent } from '../lib/reports.ts'
@@ -128,6 +129,8 @@ tx(() => {
   member.run(orgId, uid['scanner@ticketstorm.test'], 'scanner')
 
   db.prepare("INSERT INTO feature_flags (key, enabled) VALUES ('require_event_approval', 0)").run()
+  // A/B test: half of all visitors see the alternative event-page button text
+  db.prepare("INSERT INTO feature_flags (key, enabled, variant_pct) VALUES ('ab_cta_text', 1, 50)").run()
 
   const venueRows = venues.map(([name, kind, ci, dLat = 0], i) => {
     const [, , lat, lng, , tz] = cities[ci]
@@ -579,6 +582,14 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   const sess = { sessionToken: 'seed-webhook-session', userId: fan.id }
   const held = holdBestAvailable(wed.id, sess, 1)
   finalize({ holdId: held.holdId, sessionToken: sess.sessionToken, userId: fan.id, email: fan.email, key: 'seed-webhook-order', method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false, billing: { name: 'Frankie Fan', address: '1 Main St', city: 'New York', zip: '10001' } })
+}
+
+// P12B (analytics): event-page views for the funnel (counts only; holds and orders were logged by the real purchases above).
+{
+  for (const [slug, n] of [['neon-harbor-empire-saturday', 140], ['neon-harbor-megatour', 90], ['neon-harbor-empire-wednesday', 60]] as const) {
+    const id = (db.prepare('SELECT id FROM events WHERE slug = ?').get(slug) as { id: number }).id
+    for (let i = 0; i < n; i++) logEvent(id, 'view')
+  }
 }
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

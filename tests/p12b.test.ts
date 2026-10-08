@@ -21,6 +21,10 @@ const { settleEvent } = await import('../lib/reports.ts')
 const rev = await import('../lib/reviews.ts')
 const { runDigest, isoWeek } = await import('../lib/digest.ts')
 const { importArtists } = await import('../lib/favorites.ts')
+const ab = await import('../lib/ab.ts')
+const i18n = await import('../lib/i18n.ts')
+const account = await import('../lib/account.ts')
+const analytics = await import('../lib/analytics.ts')
 const dev = await import('../lib/devtools.ts')
 const orgTools = await import('../lib/organizer.ts')
 const { customersCsv } = await import('../lib/reports.ts')
@@ -394,4 +398,54 @@ test('clone event, series and the customer CSV (own org only, formula-safe)', ()
   assert.ok(csv.includes("'=HYPERLINK") && !/(^|,)=HYPERLINK/m.test(csv))
   const other = customersCsv(run("INSERT INTO orgs (name, status) VALUES ('Empty','approved')"))
   assert.equal(other.rows, 0) // another org sees none of these buyers
+})
+
+test('A/B bucketing is sticky per visitor, independent per flag and honours the share and the on/off switch', () => {
+  db.prepare("INSERT INTO feature_flags (key, enabled, variant_pct) VALUES ('ab_x', 1, 50)").run()
+  db.prepare("INSERT INTO feature_flags (key, enabled, variant_pct) VALUES ('ab_y', 1, 50)").run()
+  const ids = Array.from({ length: 2000 }, (_, i) => `visitor-${i}`)
+  const first = ids.map((id) => ab.variantFor('ab_x', id))
+  assert.deepEqual(ids.map((id) => ab.variantFor('ab_x', id)), first) // same visitor, same variant, every time
+  const b = first.filter((v) => v === 'B').length
+  assert.ok(b > 900 && b < 1100, `50% flag put ${b}/2000 in B`)
+  const second = ids.map((id) => ab.variantFor('ab_y', id))
+  assert.ok(first.some((v, i) => v !== second[i])) // flags bucket independently
+  ab.setVariantPct('ab_x', 0)
+  assert.ok(ids.every((id) => ab.variantFor('ab_x', id) === 'A'))
+  ab.setVariantPct('ab_x', 100)
+  assert.ok(ids.every((id) => ab.variantFor('ab_x', id) === 'B'))
+  db.prepare("UPDATE feature_flags SET enabled = 0 WHERE key = 'ab_x'").run()
+  assert.ok(ids.every((id) => ab.variantFor('ab_x', id) === 'A'))
+  assert.throws(() => ab.setVariantPct('ab_x', 101), /0 to 100/)
+  assert.throws(() => ab.setVariantPct('nope', 10), /Unknown flag/)
+  assert.equal(ab.variantFor('does_not_exist', 'v'), 'A')
+})
+
+test('i18n: Spanish nav and checkout strings, English fallback, junk language falls back to English', () => {
+  assert.equal(i18n.t('es', 'co.pay'), 'Pagar')
+  assert.equal(i18n.t('en', 'co.pay'), 'Pay')
+  assert.equal(i18n.validLang('fr'), 'en')
+  assert.equal(i18n.validLang('es'), 'es')
+  const es = i18n.checkoutLabels('es')
+  assert.equal(es['co.title'], 'Pago')
+  assert.ok(Object.keys(i18n.checkoutLabels('en')).every((k) => es[k] && es[k] !== i18n.t('en', k as never) || k === 'co.total')) // every checkout key has a Spanish string
+})
+
+test('funnel counts are plain counters with no identity; GDPR admin erase uses the shared function and refuses admins', () => {
+  const f0 = analytics.funnel(ev)
+  analytics.logEvent(ev, 'view')
+  assert.equal(analytics.funnel(ev).view, f0.view + 1)
+  assert.deepEqual(db.prepare("SELECT name FROM pragma_table_info('events_log') ORDER BY cid").all().map((c) => (c as { name: string }).name), ['id', 'created_at', 'event_id', 'kind'])
+  assert.ok(f0.hold > 0 && f0.order > 0) // holds and orders are logged by the real paths
+  const target = user('erase-me')
+  const admin = run("INSERT INTO users (email, name, role) VALUES ('adm@x.test','Adm','admin')")
+  buy(ev, target)
+  account.deleteAccount(target, null) // what /admin/privacy does (the admin action audits it)
+  const u = get<{ email: string; status: string; name: string }>('SELECT email, status, name FROM users WHERE id = ?', target)
+  assert.deepEqual([u.status, u.name], ['deleted', ''])
+  assert.match(u.email, /deleted/)
+  assert.equal(get<{ n: number }>('SELECT count(*) AS n FROM orders WHERE user_id = ?', target).n, 1) // orders are kept
+  assert.throws(() => account.deleteAccount(admin, null), /Admin accounts cannot/)
+  assert.equal(get<{ role: string }>('SELECT role FROM users WHERE id = ?', admin).role, 'admin')
+  assert.ok(Object.keys(account.exportData(admin)).includes('account_credit'))
 })

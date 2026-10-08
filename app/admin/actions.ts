@@ -3,9 +3,11 @@
 import { redirect } from 'next/navigation'
 import { db, tx } from '../../lib/db.ts'
 import { approveReview, holdOrder } from '../../lib/fraud.ts'
+import { deleteAccount } from '../../lib/account.ts'
 import { refundFromForm } from '../../lib/orderadmin.ts'
 import { refundEvent, refundOrder, sendConfirmation } from '../../lib/orders.ts'
 import { resolveDispute } from '../../lib/disputes.ts'
+import { setVariantPct } from '../../lib/ab.ts'
 import { decideReview } from '../../lib/reviews.ts'
 import { decideClaim } from '../../lib/protection.ts'
 import { audit, setFlag, UserError } from '../../lib/platform.ts'
@@ -298,4 +300,20 @@ export async function reviewDecision(f: FormData) {
   const id = num(f, 'reviewId')
   const approve = text(f, 'decision') === 'approve'
   run('/admin/reviews', () => { decideReview(admin.id, id, approve); audit(admin.id, approve ? 'review.approve' : 'review.reject', `review:${id}`) }, approve ? 'Approved' : 'Rejected')
+}
+
+export async function setVariant(f: FormData) {
+  const admin = await requireAdmin()
+  const key = text(f, 'key')
+  run('/admin/flags', () => { const n = setVariantPct(key, text(f, 'pct')); audit(admin.id, 'flag.variant', `flag:${key}`, { pct: n }) }, 'Updated')
+}
+
+export async function adminErase(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'userId')
+  run('/admin/privacy', () => {
+    if (f.get('confirm') !== 'on') throw new UserError('Tick the confirmation box')
+    deleteAccount(id, null)
+    audit(admin.id, 'gdpr.erase', `user:${id}`)
+  }, `User #${id} erased`)
 }

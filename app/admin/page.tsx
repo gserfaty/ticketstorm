@@ -24,6 +24,7 @@ export default async function Admin() {
         <li><Link href="/admin/fraud">Fraud and bots</Link></li>
         <li><Link href="/admin/scalpers">Possible scalpers</Link> ({n("SELECT count(*) AS n FROM users WHERE flagged = 1")} flagged accounts)</li>
         <li><Link href="/admin/support">Support tickets</Link> ({n("SELECT count(*) AS n FROM support_tickets WHERE status = 'open'")} open)</li>
+        <li><Link href="/admin/privacy">Privacy requests (export and erase a user)</Link></li>
         <li><Link href="/admin/audit">Audit log</Link></li>
         <li><Link href="/admin/fees">Fee defaults</Link></li>
         <li><Link href="/admin/taxes">City taxes</Link></li>

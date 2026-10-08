@@ -5,6 +5,9 @@ import { randomToken } from './auth.ts'
 import type { Viewer } from './orders.ts'
 import { assertNotImpersonating, endSession, startSession } from './impersonation.ts'
 import { UserError } from './platform.ts'
+import { variantFor } from './ab.ts'
+import { validLang } from './i18n.ts'
+import type { Lang } from './i18n.ts'
 
 export const COOKIE = 'ticketstorm_session'
 const DAYS = 30
@@ -155,4 +158,14 @@ export async function logout(auditStop = true) {
 export async function currencyPref(): Promise<string> {
   const c = (await cookies()).get('currency')?.value
   return c && /^[A-Z]{3}$/.test(c) ? c : 'USD'
+}
+
+// Interface language (cookie set by the header switch): 'en' or 'es'.
+export async function langPref(): Promise<Lang> {
+  return validLang((await cookies()).get('lang')?.value)
+}
+
+// Sticky A/B variant of a flag for this visitor: hashed from the long-lived `ab` cookie (set by middleware), so it survives login and logout.
+export async function abVariant(key: string): Promise<'A' | 'B'> {
+  return variantFor(key, (await cookies()).get('ab')?.value ?? 'none')
 }

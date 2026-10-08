@@ -9,7 +9,7 @@ import { displayLevels } from '../../../lib/pricing.ts'
 import { getPriceAlert } from '../../../lib/pricealerts.ts'
 import { priceAlert } from '../../alerts/actions.ts'
 import { approx, displayCurrency } from '../../../lib/currency.ts'
-import { allInOn, currencyPref, getSession, getUser } from '../../../lib/session.ts'
+import { abVariant, allInOn, currencyPref, getSession, getUser } from '../../../lib/session.ts'
 import { registerVerifiedFan, unlockPresale } from '../../access/actions.ts'
 import Heart from '../../../components/Heart.tsx'
 import ShareButton from '../../../components/ShareButton.tsx'
@@ -37,6 +37,7 @@ export default async function EventPage({ params, searchParams }: { params: Prom
   if (!e) notFound()
   if (e!.status !== 'draft') logEvent(e!.id, 'view')
   const sp = await searchParams
+  const cta = await abVariant('ab_cta_text') // A/B test (admin /admin/flags): button wording
   const nowIso = new Date().toISOString()
   const user = await getUser()
   const unlocked = openWindowIds(e!.id, (await getSession())?.token)
@@ -135,7 +136,7 @@ export default async function EventPage({ params, searchParams }: { params: Prom
             {Array.from({ length: max }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
           </select></label>
           {hasAda && <label><input type="checkbox" name="accessible" value="1" /> Accessible seating</label>}
-          <button>{s.canBuy ? 'Find tickets' : 'Find presale tickets'}</button>
+          <button>{s.canBuy ? (cta === 'B' ? 'Get tickets now' : 'Find tickets') : 'Find presale tickets'}</button>
         </form>
       ) : notOnSale ? (
         <p><strong>On sale {fmtDateTime(e!.onsale_at!, e!.tz)}</strong> · <Until iso={e!.onsale_at!} label="On sale in" /></p>

@@ -33,7 +33,7 @@ async function nativeWallet(method: string, cents: number): Promise<boolean> {
 }
 
 // Card number and CVC are never given a `name` that is logged or stored server-side; they are read once by the pay action.
-export default function PayForm({ action, holdId, idemKey, expiresAt, email, saved, canSave, total, totalCents, installments, captcha, deliveries, prefill, express, creditCents }: {
+export default function PayForm({ action, holdId, idemKey, expiresAt, email, saved, canSave, total, totalCents, installments, captcha, deliveries, prefill, express, creditCents, labels }: {
   action: (prev: PayState, f: FormData) => Promise<PayState>
   holdId: number
   idemKey: string
@@ -47,6 +47,7 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
   captcha: Captcha
   deliveries: [string, string][] // [value, label] the event offers; mobile first
   prefill?: { bname: string; baddress: string; bcity: string; bzip: string } // the account's saved address
+  labels: Record<string, string> // translated checkout strings (lib/i18n.ts checkoutLabels)
   creditCents?: number // account credit available to spend (accounts only)
   express?: boolean // saved card (first in `saved`) and saved address are filled in; only the CVC is left to type
 }) {
@@ -73,26 +74,26 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
   return (
     <form ref={formRef} action={formAction} className="stack">
       {state.error && <p className="error" role="alert">{state.error}</p>}
-      <p>Time left to pay: <strong><Countdown expiresAt={expiresAt} onExpire={() => router.refresh()} /></strong></p>
+      <p>{labels['co.timeleft']}: <strong><Countdown expiresAt={expiresAt} onExpire={() => router.refresh()} /></strong></p>
       <input type="hidden" name="holdId" value={holdId} />
       <input type="hidden" name="key" value={idemKey} />
       <input type="hidden" name="method" value={method} />
-      <h2>Contact</h2>
-      {email ? <p>Tickets will be sent to <strong>{email}</strong></p> : <input name="email" type="email" defaultValue={v.email} placeholder="Email (for your tickets)" required autoComplete="email" />}
+      <h2>{labels['co.contact']}</h2>
+      {email ? <p>{labels['co.sentto']} <strong>{email}</strong></p> : <input name="email" type="email" defaultValue={v.email} placeholder="Email (for your tickets)" required autoComplete="email" />}
       {deliveries.length > 1 ? (
         <label>Delivery <select name="delivery" defaultValue="mobile">{deliveries.map(([k, name]) => <option key={k} value={k}>{name}</option>)}</select></label>
       ) : <p className="muted">Delivery: Mobile ticket</p>}
       {express && <p className="notice">Express checkout: your default card and saved address are filled in. Re-enter the card&apos;s CVC and press Pay.</p>}
-      <h2>Billing address</h2>
+      <h2>{labels['co.billing']}</h2>
       <input name="bname" defaultValue={v.bname} placeholder="Full name" required autoComplete="name" />
       <input name="baddress" defaultValue={v.baddress} placeholder="Street address" required autoComplete="street-address" />
       <input name="bcity" defaultValue={v.bcity} placeholder="City" required autoComplete="address-level2" />
       <input name="bzip" defaultValue={v.bzip} placeholder="ZIP" required autoComplete="postal-code" />
-      <h2>Gift card and credit</h2>
-      <input name="giftcode" placeholder="Gift card code (optional)" aria-label="Gift card code" autoComplete="off" />
-      {!!creditCents && <label><input type="checkbox" name="usecredit" /> Use my account credit (${(creditCents / 100).toFixed(2)} available)</label>}
+      <h2>{labels['co.stored']}</h2>
+      <input name="giftcode" placeholder={labels['co.giftcode']} aria-label="Gift card code" autoComplete="off" />
+      {!!creditCents && <label><input type="checkbox" name="usecredit" /> {labels['co.usecredit']} (${(creditCents / 100).toFixed(2)} available)</label>}
       <p className="muted">A gift card or credit pays first; if it covers less than the total, the card below is charged only the rest.</p>
-      <h2>Payment</h2>
+      <h2>{labels['co.payment']}</h2>
       <div className="row" role="radiogroup" aria-label="Payment method">
         {METHODS.map(([k, name]) => <label key={k}><input type="radio" checked={method === k} onChange={() => setMethod(k)} /> {name}</label>)}
       </div>
@@ -104,7 +105,7 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
               {saved.map((c) => <option key={c.id} value={c.id}>{c.brand} ending {c.last4} ({c.exp})</option>)}
             </select>
           )}
-          <input name="number" placeholder="Card number" inputMode="numeric" autoComplete="cc-number" />
+          <input name="number" placeholder={labels['co.cardnumber']} inputMode="numeric" autoComplete="cc-number" />
           <input name="exp" placeholder="MM/YY" autoComplete="cc-exp" />
           <input name="cvc" placeholder="CVC (also needed for a saved card)" inputMode="numeric" autoComplete="cc-csc" required={express} />
           {canSave && <label><input type="checkbox" name="save" /> Save this card</label>}
@@ -116,11 +117,11 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
       {installments && method !== 'paypal' && (
         <label><input type="checkbox" name="installments" /> Pay in 4: {installments.join(', ')}. The first is charged now, the others every 14 days or less.</label>
       )}
-      <label><input type="checkbox" name="policy" required /> I accept the refund policy: refunds only if the event is cancelled, or within the window after it is rescheduled, or with ticket protection.</label>
+      <label><input type="checkbox" name="policy" required /> {labels['co.policy']}</label>
       <input type="hidden" name="captchaToken" value={cap.token} />
-      <label>Are you human? What is {cap.question}? <input name="captchaAnswer" inputMode="numeric" required autoComplete="off" /></label>
+      <label>{labels['co.human']} {cap.question}? <input name="captchaAnswer" inputMode="numeric" required autoComplete="off" /></label>
       <input name="website" className="hp" tabIndex={-1} autoComplete="off" aria-hidden="true" />
-      <Submit label={method === 'paypal' ? 'Continue to PayPal' : `Pay ${total}`} onClick={beforeSubmit} />
+      <Submit label={method === 'paypal' ? labels['co.paypal'] : `${labels['co.pay']} ${total}`} onClick={beforeSubmit} />
       {dialog && (
         <dialog open className="card" aria-label={`${label} confirmation`}>
           <p><strong>{label}</strong> (simulated): pay {total} to TicketStorm?</p>

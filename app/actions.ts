@@ -12,6 +12,7 @@ import { sendEmail, APP_URL } from '../lib/notify.ts'
 import { nearestCity } from '../lib/geo.ts'
 import { ensureSession, login } from '../lib/session.ts'
 import { validCurrency } from '../lib/currency.ts'
+import { validLang } from '../lib/i18n.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 const fail = (path: string, msg: string): never => redirect(`${path}${path.includes('?') ? '&' : '?'}error=${encodeURIComponent(msg)}`)
@@ -195,6 +196,13 @@ export async function setCityByCoords(lat: number, lng: number) {
 // Display currency (cookie). Only changes how prices are shown, never what is charged.
 export async function setCurrency(f: FormData) {
   ;(await cookies()).set('currency', validCurrency(field(f, 'currency')), { path: '/', sameSite: 'lax', maxAge: 365 * 86_400 })
+  const ref = (await headers()).get('referer')
+  const host = (await headers()).get('host')
+  redirect(ref && host && new URL(ref).host === host ? new URL(ref).pathname + new URL(ref).search : '/')
+}
+
+export async function setLang(f: FormData) {
+  ;(await cookies()).set('lang', validLang(field(f, 'lang')), { path: '/', sameSite: 'lax', maxAge: 365 * 86_400 })
   const ref = (await headers()).get('referer')
   const host = (await headers()).get('host')
   redirect(ref && host && new URL(ref).host === host ? new URL(ref).pathname + new URL(ref).search : '/')
