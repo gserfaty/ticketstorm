@@ -10,7 +10,7 @@ export default async function Category({ params, searchParams }: { params: Promi
   const genres = genresIn(slug)
   const wanted = (await searchParams).genre
   const genre = genres.find((g) => g === wanted) // only known genres
-  const rows = searchEvents({ category: slug, genre, unit: 'mi' })
+  const { rows } = searchEvents({ category: slug, genre, unit: 'mi' })
   return (
     <>
       <h1>{cat!.name}</h1>

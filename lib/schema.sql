@@ -187,6 +187,8 @@ CREATE TABLE IF NOT EXISTS price_levels (
   dyn_max_cents INTEGER
 );
 
+CREATE INDEX IF NOT EXISTS price_levels_event ON price_levels(event_id);
+
 CREATE TABLE IF NOT EXISTS offers (
   id INTEGER PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

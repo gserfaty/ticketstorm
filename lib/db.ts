@@ -8,7 +8,18 @@ function open(): DatabaseSync {
   const dir = join(process.cwd(), 'data')
   mkdirSync(dir, { recursive: true })
   const d = new DatabaseSync(process.env.TICKETSTORM_DB ?? join(dir, 'ticketstorm.db'))
-  d.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON')
+  d.exec('PRAGMA busy_timeout=5000')
+  // switching to WAL needs an exclusive lock; parallel build workers race here, so retry on BUSY
+  for (let i = 0; ; i++) {
+    try {
+      d.exec('PRAGMA journal_mode=WAL')
+      break
+    } catch (e) {
+      if (i >= 50 || (e as { errcode?: number }).errcode !== 5 && (e as { errcode?: number }).errcode !== 261) throw e
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
+    }
+  }
+  d.exec('PRAGMA foreign_keys=ON')
   d.exec(readFileSync(join(process.cwd(), 'lib', 'schema.sql'), 'utf8'))
   return d
 }

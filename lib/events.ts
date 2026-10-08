@@ -53,7 +53,7 @@ const SELECT = `SELECT e.id, e.slug, e.title, e.category, e.genre, e.starts_at, 
   FROM events e JOIN venues v ON v.id = e.venue_id JOIN cities c ON c.id = v.city_id`
 const VISIBLE = `e.status != 'draft' AND e.approved = 1`
 
-const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s))
+const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s + 'T00:00Z').toISOString().slice(0, 10) === s
 
 // Validate URL params; anything malformed is dropped.
 export function parseFilters(sp: Params): Filters {
@@ -77,7 +77,7 @@ export function parseFilters(sp: Params): Filters {
   return f
 }
 
-export function searchEvents(f: Filters, limit = 60): EventRow[] {
+export function searchEvents(f: Filters, limit = 60): { rows: EventRow[]; total: number } {
   const where = [VISIBLE, 'e.starts_at > ?']
   const args: (string | number)[] = [new Date().toISOString()]
   if (f.category) { where.push('e.category = ?'); args.push(f.category) }
@@ -98,15 +98,16 @@ export function searchEvents(f: Filters, limit = 60): EventRow[] {
     const km = f.unit === 'km' ? f.radius : miToKm(f.radius)
     rows = rows.filter((r) => haversineKm(c.lat, c.lng, r.vlat, r.vlng) <= km)
   }
-  let [from, to] = [f.from, f.to]
-  if (f.when && !from && !to) [from, to] = whenRange(f.when, new Date())
-  if (from || to) {
+  if (f.from || f.to || f.when) {
+    const nowIso = new Date().toISOString()
     rows = rows.filter((r) => {
+      // "today" is the venue's local today, so evening shows aren't dropped after UTC midnight
+      const [from, to] = f.from || f.to ? [f.from, f.to] : whenRange(f.when!, localDate(nowIso, r.tz))
       const d = localDate(r.starts_at, r.tz)
       return (!from || d >= from) && (!to || d <= to)
     })
   }
-  return rows.slice(0, limit)
+  return { rows: rows.slice(0, limit), total: rows.length }
 }
 
 export function trendingEvents(limit: number): EventRow[] {
