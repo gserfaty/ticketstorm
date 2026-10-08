@@ -7,6 +7,7 @@ import { money } from './format.ts'
 // "Pay in 4": the first quarter is charged at checkout, the other three are 'pending' payments rows with a due date and are charged by the
 // job. Policy for a failed installment: the payment is declined, the order goes to 'review' (tickets stop working, the other installments
 // pause) and the buyer is told. An admin then approves it (the unpaid part is written off) or cancels it (what was paid is refunded).
+// ponytail: a failed installment is not retried automatically (one decline = review); add a retry schedule when real payments exist.
 export const MIN_TOTAL = 4000 // cents
 const DAY = 86_400_000
 

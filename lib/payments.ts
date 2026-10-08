@@ -107,7 +107,7 @@ export function chargeStored(cardOrder: number, toOrder: number, amount: number,
   const find = () => db.prepare('SELECT * FROM payments WHERE idempotency_key = ?').get(key) as Payment | undefined
   const prior = find()
   if (prior) return prior
-  const c = db.prepare("SELECT brand, last4 FROM payments WHERE order_id = ? AND kind = 'charge' AND status = 'succeeded' AND method != 'exchange' ORDER BY id").get(cardOrder) as { brand: string; last4: string } | undefined
+  const c = db.prepare("SELECT brand, last4 FROM payments WHERE order_id = ? AND kind = 'charge' AND status = 'succeeded' ORDER BY id").get(cardOrder) as { brand: string; last4: string } | undefined // exchange credits carry the card of the payment they came from
   if (!c) throw new Error('No card on this order')
   const o = offSession(c.last4)
   db.prepare("INSERT INTO payments (order_id, kind, method, amount, status, brand, last4, decline_code, idempotency_key) VALUES (?, 'charge', 'card', ?, ?, ?, ?, ?, ?)")

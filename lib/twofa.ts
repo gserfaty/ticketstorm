@@ -55,6 +55,7 @@ export function checkPending(token: string, sessionToken: string, now = Date.now
   return got.length === want.length && timingSafeEqual(got, want) ? Number(uid) : undefined
 }
 
+// ponytail: the phone number is not verified when 2FA is switched on (a typo locks the user out until support turns it off).
 // Turn 2FA on or off. Both re-check the password (a hijacked session can't switch it off). Needs a phone to text.
 export function setTwofa(userId: number, password: string, on: boolean) {
   const u = db.prepare('SELECT password_hash, phone FROM users WHERE id = ?').get(userId) as { password_hash: string | null; phone: string | null }

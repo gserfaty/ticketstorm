@@ -150,6 +150,19 @@ test('exchange: the price difference is charged going up and refunded going down
   assert.equal(get<{ n: number }>('SELECT count(*) AS n FROM exchanges').n, 2)
 })
 
+test('an exchanged ticket can be exchanged again (the card travels with the credit)', () => {
+  const u = user('ex3')
+  const first = buy(dear, { userId: u })
+  const t1 = get<{ id: number }>('SELECT id FROM tickets WHERE order_id = ?', first.orderId).id
+  const a = completeExchange(t1, inv.holdBestAvailable(cheap, { sessionToken: 'ex3-a', userId: u }, 1).holdId, u, 'ex3-a')
+  assert.ok(a.diff < 0)
+  const t2 = get<{ id: number }>('SELECT id FROM tickets WHERE order_id = ?', a.orderId).id
+  const b = completeExchange(t2, inv.holdBestAvailable(dear, { sessionToken: 'ex3-b', userId: u }, 1).holdId, u, 'ex3-b')
+  assert.ok(b.diff > 0)
+  assert.equal(pay.paidOf(b.orderId), order(b.orderId).total)
+  assert.equal(get<{ s: number }>("SELECT sum(amount) AS s FROM payments WHERE order_id = ? AND kind = 'charge' AND method = 'card'", b.orderId).s, b.diff)
+})
+
 test('a declined price difference changes nothing', () => {
   const u = user('ex2')
   const o = buy(cheap, { userId: u })

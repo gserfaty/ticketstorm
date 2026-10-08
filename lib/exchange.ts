@@ -14,6 +14,7 @@ import { UserError } from './platform.ts'
 // Money: the value of the old ticket moves to the new order as an 'exchange' credit (payments rows on both orders, nothing leaves TicketStorm);
 // only the difference touches the card. The new order is its own order for the new event, so refundEvent, limits and organizer tools stay per event.
 
+// ponytail: promo, bundle and pay-in-4 orders cannot be exchanged; handle them by splitting the discount share / settling the plan first.
 type Old = { ticketId: number; orderId: number; eventId: number; seriesKey: string; value: number; itemId: number; email: string }
 
 // The ticket must be the caller's, valid, on a paid order, for an upcoming show of a series. Not supported: promo orders (the discount share

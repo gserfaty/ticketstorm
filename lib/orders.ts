@@ -287,7 +287,8 @@ function doRefund(orderId: number, opts: RefundOpts): RefundResult {
       db.prepare('UPDATE order_items SET refunded_cents = ? WHERE id = ?').run(Math.max(value, 1), it.id)
       amount += value
     }
-    amount = Math.min(amount, remaining) // a pay-in-4 order has only paid part of its price
+    // ponytail: on a pay-in-4 order an item refund is capped at what was paid so far; the unpaid installments are not re-split.
+    amount = Math.min(amount, remaining)
   } else {
     const prot = opts.keepProtection ? (db.prepare("SELECT coalesce(sum(unit_cents), 0) AS s FROM order_items WHERE order_id = ? AND kind = 'protection'").get(orderId) as { s: number }).s : 0
     amount = Math.max(remaining - prot, 0)
