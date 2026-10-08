@@ -1,6 +1,6 @@
 'use client'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { PointerEvent as RPointerEvent } from 'react'
+import type { KeyboardEvent as RKeyboardEvent, PointerEvent as RPointerEvent } from 'react'
 import Countdown from './Countdown.tsx'
 
 export type MapSection = { id: number; name: string; kind: 'reserved' | 'ga'; path: string; lx: number; ly: number }
@@ -59,6 +59,8 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
   const wrap = useRef<HTMLDivElement>(null)
   const drag = useRef<{ cx: number; cy: number; vb: VB; moved: boolean } | null>(null)
   const dragged = useRef(false)
+  const vbRef = useRef(vb)
+  vbRef.current = vb
 
   const levelById = useMemo(() => new Map(levels.map((l) => [l.id, l])), [levels])
   const seatById = useMemo(() => new Map(seats.map((s) => [s[0], s])), [seats])
@@ -90,6 +92,8 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
   useEffect(() => {
     const el = svg.current!
     const onWheel = (e: WheelEvent) => {
+      // let the page scroll unless ctrl/meta is held or the map is already zoomed in
+      if (!(e.ctrlKey || e.metaKey) && vbRef.current.w >= W) return
       e.preventDefault()
       const r = el.getBoundingClientRect()
       const k = e.deltaY > 0 ? 1.15 : 1 / 1.15
@@ -124,12 +128,13 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
   }
 
   function openSection(s: MapSection) {
-    if (dragged.current) return
+    if (dragged.current) return void (dragged.current = false)
     setOpen(s.id)
     setVb(bbox(s.path))
   }
   function clickSeat(id: number) {
-    if (dragged.current || hold) return
+    if (dragged.current) return void (dragged.current = false)
+    if (hold) return
     setMsg(null)
     setSelected((sel) => {
       if (sel.includes(id)) return sel.filter((x) => x !== id)
@@ -170,6 +175,18 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
   const curGa = cur?.kind === 'ga' ? gaById.get(cur.id) : undefined
   const minC = Math.min(...levels.map((l) => l.cents))
   const maxC = Math.max(...levels.map((l) => l.cents))
+  // keyboard access for clickable SVG groups: Tab to focus, Enter/Space to activate
+  const key = (fn: () => void) => ({
+    role: 'button' as const,
+    tabIndex: 0,
+    onKeyDown: (e: RKeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        dragged.current = false
+        fn()
+      }
+    },
+  })
   const seatLabel = (s: MapSeat) => `${sectionById.get(s[1])?.name} · Row ${s[2]} · Seat ${s[3]}`
   const listed = (hold ? hold.seatIds : selected).map((id) => seatById.get(id)).filter((s): s is MapSeat => !!s)
   const total = selected.reduce((n, id) => n + price(id), 0)
@@ -194,7 +211,7 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
       <div className="map-wrap" ref={wrap}>
         <svg ref={svg} viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`} role="group" aria-label="Seat map" style={{ touchAction: vb.w < W ? 'none' : 'pan-y' }}
           onPointerDown={down} onPointerMove={move} onPointerUp={() => (drag.current = null)} onPointerLeave={() => { drag.current = null; setTip(null) }}>
-          <rect x={0} y={0} width={W} height={H} fill="transparent" onClick={() => { if (!dragged.current) setOpen(null) }} />
+          <rect x={0} y={0} width={W} height={H} fill="transparent" onClick={() => { if (!dragged.current) setOpen(null); dragged.current = false }} />
           <text x={500} y={22} textAnchor="middle" className="stage">STAGE / FIELD</text>
           {sections.map((s) => {
             const g = gaById.get(s.id)
@@ -204,7 +221,8 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
             const free = g ? g.free : ss.filter((x) => status.get(x[0])?.[1] === 'a').length
             const off = free === 0 || (lv?.cents ?? 0) > maxPrice
             return (
-              <g key={s.id} className={`sec ${open === s.id ? 'open' : ''}`} onClick={() => openSection(s)}
+              <g key={s.id} className={`sec ${open === s.id ? 'open' : ''}`} onClick={() => openSection(s)} {...key(() => openSection(s))}
+                aria-label={`${s.kind === 'ga' ? 'General admission' : 'Section'} ${s.name}, ${free} available`}
                 onPointerMove={(e) => showTip(e, `${s.kind === 'ga' ? 'General admission ' : 'Section '}${s.name} · ${lv ? usd(lv.cents) : ''} · ${free} available`)} onPointerLeave={() => setTip(null)}>
                 <path d={s.path} fill={off ? '#2a2d45' : (lv?.color ?? '#3b82f6')} fillOpacity={open === s.id ? 0.18 : off ? 0.5 : 0.55} stroke="#9aa" strokeWidth={1} />
                 {open !== s.id && <text x={s.lx} y={s.ly} textAnchor="middle" dominantBaseline="central" className="seclabel">{s.name}</text>}
@@ -219,7 +237,8 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
             const dim = dimmed(id, flags)
             const can = state === 'a' && !dim && !hold
             return (
-              <g key={id} opacity={dim ? 0.2 : 1} className={`seat st-${state} ${flags ? 'ada' : ''}`} onClick={() => can || state === 'sel' ? clickSeat(id) : undefined}
+              <g key={id} opacity={dim ? 0.2 : 1} className={`seat st-${state} ${flags ? 'ada' : ''}`} onClick={() => can || state === 'sel' ? clickSeat(id) : undefined} {...key(() => can || state === 'sel' ? clickSeat(id) : undefined)}
+                aria-label={`${seatLabel(s)}, ${usd(price(id))}, ${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', sel: 'selected', mine: 'yours' }[state]}`}
                 onPointerMove={(e) => showTip(e, `${seatLabel(s)} · ${usd(price(id))}${flags & 1 ? ' · ♿ accessible' : flags & 2 ? ' · companion' : ''} · ${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', sel: 'selected', mine: 'yours' }[state]}`)} onPointerLeave={() => setTip(null)}>
                 <circle cx={x} cy={y} r={r} fill={state === 'a' ? (levelById.get(st?.[2] ?? 0)?.color ?? '#3b82f6') : undefined} />
                 {(flags & 1) > 0 && <text x={x} y={y} fontSize={r * 1.5} textAnchor="middle" dominantBaseline="central" pointerEvents="none">♿</text>}
@@ -272,7 +291,7 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
         <div className="card">
           <strong>{selected.length} selected</strong> · {usd(total)}
           <ul>
-            {listed.map((s) => <li key={s[0]}>{seatLabel(s)} · {usd(price(s[0]))} <button aria-label="Remove" onClick={() => clickSeat(s[0])}>×</button></li>)}
+            {listed.map((s) => <li key={s[0]}>{seatLabel(s)} · {usd(price(s[0]))} <button aria-label="Remove" onClick={() => { dragged.current = false; clickSeat(s[0]) }}>×</button></li>)}
           </ul>
           <button disabled={busy} onClick={() => post({ seatIds: selected })}>Hold {selected.length} seat{selected.length === 1 ? '' : 's'}</button>
         </div>

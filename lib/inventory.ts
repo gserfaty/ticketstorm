@@ -68,6 +68,10 @@ function place(eventId: number, owner: Owner, qty: number, pick: () => number[])
       .all(eventId, ...ids) as { seat_id: number; event_ids: string }[]
     for (const b of bundled) {
       for (const other of (JSON.parse(b.event_ids) as number[]).filter((e) => e !== eventId)) {
+        const oe = db.prepare('SELECT status, starts_at, onsale_at, approved FROM events WHERE id = ?').get(other) as
+          | { status: string; starts_at: string; onsale_at: string | null; approved: number }
+          | undefined
+        if (!oe || oe.status === 'draft' || !oe.approved || !eventState(oe).canBuy) throw new HoldError('A game in this bundle is not on sale')
         const row = db.prepare('SELECT id FROM inventory WHERE event_id = ? AND seat_id = ?').get(other, b.seat_id) as { id: number } | undefined
         if (!row) throw new HoldError('Bundle seat unavailable')
         all.push(row.id)
@@ -109,8 +113,9 @@ export function holdBestAvailable(eventId: number, owner: Owner, qty: number, le
     const rows = db
       .prepare(
         `SELECT i.id, i.section_id, st.row, st.number FROM inventory i JOIN seats st ON st.id = i.seat_id JOIN sections s ON s.id = i.section_id
+         JOIN price_levels pl ON pl.id = i.price_level_id
          WHERE i.event_id = ? AND i.window_id IS NULL AND (i.status = 'available' OR (i.status = 'held' AND i.held_until < ?))
-           ${levelId ? 'AND i.price_level_id = ?' : ''} AND ${accessible ? '(st.accessible = 1 OR st.companion = 1)' : 'st.accessible = 0 AND st.companion = 0'}
+           ${levelId ? 'AND i.price_level_id = ?' : 'AND pl.event_ids IS NULL'} AND ${accessible ? '(st.accessible = 1 OR st.companion = 1)' : 'st.accessible = 0 AND st.companion = 0'}
          ORDER BY s.rank, s.id, st.row, st.number`,
       )
       .all(...args) as { id: number; section_id: number; row: string; number: number }[]
@@ -126,6 +131,7 @@ export function holdBestAvailable(eventId: number, owner: Owner, qty: number, le
 
 export function holdGA(eventId: number, owner: Owner, sectionId: number, qty: number): Held {
   return place(eventId, owner, qty, () => {
+    if (!db.prepare("SELECT 1 FROM inventory WHERE event_id = ? AND section_id = ? AND seat_id IS NULL LIMIT 1").get(eventId, sectionId)) throw new HoldError('Unknown section', 400)
     const rows = db
       .prepare(
         `SELECT id FROM inventory WHERE event_id = ? AND section_id = ? AND seat_id IS NULL AND window_id IS NULL
@@ -151,14 +157,14 @@ export function getAvailability(eventId: number) {
   const now = new Date().toISOString()
   const seats = db
     .prepare(
-      `SELECT id, CASE status WHEN 'held' THEN CASE WHEN held_until < ? THEN 'a' ELSE 'h' END ELSE substr(status, 1, 1) END AS st, price_level_id AS lv
+      `SELECT id, CASE WHEN window_id IS NOT NULL THEN 'b' WHEN status = 'held' THEN CASE WHEN held_until < ? THEN 'a' ELSE 'h' END ELSE substr(status, 1, 1) END AS st, price_level_id AS lv
        FROM inventory WHERE event_id = ? AND seat_id IS NOT NULL ORDER BY id`,
     )
     .all(now, eventId) as { id: number; st: string; lv: number }[]
   const ga = db
     .prepare(
       `SELECT section_id AS sectionId, price_level_id AS levelId, count(*) AS total,
-         sum(status = 'available' OR (status = 'held' AND held_until < ?)) AS free
+         sum(window_id IS NULL AND (status = 'available' OR (status = 'held' AND held_until < ?))) AS free
        FROM inventory WHERE event_id = ? AND seat_id IS NULL GROUP BY section_id, price_level_id`,
     )
     .all(now, eventId) as { sectionId: number; levelId: number; total: number; free: number }[]
