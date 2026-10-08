@@ -278,6 +278,7 @@ CREATE TABLE IF NOT EXISTS orders (
   promo_id INTEGER,
   delivery TEXT NOT NULL DEFAULT 'mobile',
   source TEXT,
+  refund_error TEXT, -- set when an event-cancel refund failed; order stays 'cancelled' until a retry succeeds
   idempotency_key TEXT NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id);
@@ -339,4 +340,20 @@ CREATE TABLE IF NOT EXISTS saved_cards (
   exp TEXT NOT NULL,
   fake_token TEXT NOT NULL,
   UNIQUE(user_id, brand, last4)
+);
+
+-- Platform (P5)
+CREATE TABLE IF NOT EXISTS feature_flags (
+  key TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  variant_pct INTEGER NOT NULL DEFAULT 100
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  actor_id INTEGER REFERENCES users(id),
+  action TEXT NOT NULL,
+  target TEXT NOT NULL,
+  data TEXT
 );

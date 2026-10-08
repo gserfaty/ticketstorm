@@ -27,3 +27,30 @@ export function whenRange(when: 'today' | 'weekend' | 'month', today: string): [
   if (dow >= 5) return [day(0), day(7 - dow)]
   return [day(5 - dow), day(7 - dow)]
 }
+
+export const slugify = (s: string) => s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+
+// Local wall-clock time in a tz -> UTC ISO (DST-correct).
+export function localToUtc(y: number, m: number, d: number, h: number, min: number, tz: string): string {
+  const guess = Date.UTC(y, m, d, h, min)
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' })
+      .formatToParts(new Date(guess)).map((x) => [x.type, +x.value]),
+  )
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute)
+  return new Date(guess - (asUtc - guess)).toISOString()
+}
+
+// <input type="datetime-local"> value ("YYYY-MM-DDTHH:mm", venue wall clock) -> UTC ISO, or null if malformed.
+export function parseLocal(v: string, tz: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(v)
+  if (!m || Number.isNaN(Date.parse(v + 'Z'))) return null
+  return localToUtc(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], tz)
+}
+
+// UTC ISO -> datetime-local value on the wall clock of tz
+export const toLocalInput = (iso: string, tz: string) =>
+  new Intl.DateTimeFormat('sv-SE', { timeZone: tz, dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso)).replace(' ', 'T')
+
+// HH:MM on the wall clock of tz
+export const fmtTime = (iso: string, tz: string) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit' }).format(new Date(iso))

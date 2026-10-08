@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { db, tx } from './db.ts'
 import { HoldError } from './inventory.ts'
-import { recordCharge } from './payments.ts'
+import { recordCharge, refund } from './payments.ts'
 import type { Payment } from './payments.ts'
 import { quote } from './pricing.ts'
 import { APP_URL, notify, sendEmail } from './notify.ts'
@@ -149,4 +149,49 @@ export function getTicket(id: number, v: Viewer) {
   if (!t) return undefined
   const ok = t.owner_id !== null ? v.userId === t.owner_id : canViewOrder({ ...t, user_id: null }, v)
   return ok ? t : undefined
+}
+
+// Cancel an event and fully refund every order. Safe to run again: refunded orders are skipped, and orders whose refund
+// failed (card 0341) are retried. Each order is its own tx. A failed refund leaves the order 'cancelled' + refund_error
+// (never 'refunded') so admin can see and retry it. Inventory stays sold: the event is closed, nothing can resell it.
+// ponytail: a bundle order is refunded and cancelled whole when any one game in it is cancelled.
+export function refundEvent(eventId: number): { refunded: number; failed: number } {
+  const ev = db.prepare('SELECT title FROM events WHERE id = ?').get(eventId) as { title: string } | undefined
+  if (!ev) throw new Error('No such event')
+  tx(() => {
+    db.prepare("UPDATE events SET status = 'cancelled' WHERE id = ?").run(eventId)
+    db.prepare("UPDATE inventory SET status = 'available', hold_id = NULL, held_until = NULL WHERE status = 'held' AND hold_id IN (SELECT id FROM holds WHERE event_id = ? AND status = 'active')").run(eventId)
+    db.prepare("UPDATE holds SET status = 'released' WHERE event_id = ? AND status = 'active'").run(eventId)
+  })
+  const orders = db
+    .prepare("SELECT id FROM orders WHERE event_id = ? AND (status IN ('paid','review') OR (status = 'cancelled' AND refund_error IS NOT NULL)) ORDER BY id")
+    .all(eventId) as { id: number }[]
+  let refunded = 0
+  let failed = 0
+  for (const { id } of orders) {
+    const ok = tx(() => {
+      const o = db.prepare('SELECT user_id, email, status, access_token FROM orders WHERE id = ?').get(id) as { user_id: number | null; email: string; status: string; access_token: string }
+      const charge = db.prepare("SELECT id FROM payments WHERE order_id = ? AND kind = 'charge' AND status = 'succeeded'").get(id) as { id: number } | undefined
+      const done = db.prepare("SELECT 1 FROM payments WHERE order_id = ? AND kind = 'refund' AND status = 'succeeded'").get(id)
+      const amount = (db.prepare('SELECT coalesce(sum(unit_cents + fee_cents + tax_cents), 0) AS s FROM order_items WHERE order_id = ?').get(id) as { s: number }).s
+      // free comps / no charge: nothing to refund
+      const ok = done || !charge || amount === 0 ? true : refund(charge.id, amount)
+      db.prepare("UPDATE tickets SET status = 'cancelled' WHERE order_id = ? AND status IN ('valid','listed','used')").run(id)
+      db.prepare('UPDATE orders SET status = ?, refund_error = ? WHERE id = ?').run(ok ? 'refunded' : 'cancelled', ok ? null : 'refund_failed', id)
+      const after = ok ? 'refunded' : 'cancelled'
+      if (o.status !== after) {
+        const link = `${APP_URL}/orders/${id}${o.user_id ? '' : `?t=${o.access_token}`}`
+        sendEmail(
+          o.email,
+          `${ev.title} has been cancelled`,
+          ok ? `${ev.title} was cancelled. Your order #${id} was refunded in full (${money(amount)}).\n${link}` : `${ev.title} was cancelled. Your refund of ${money(amount)} for order #${id} could not be completed yet; we will retry and email you.\n${link}`,
+        )
+        if (o.user_id) notify(o.user_id, 'order', `${ev.title} was cancelled`, ok ? 'Your order was refunded.' : 'Your refund is pending.', `/orders/${id}`)
+      }
+      return ok
+    })
+    if (ok) refunded++
+    else failed++
+  }
+  return { refunded, failed }
 }

@@ -4,6 +4,7 @@ import { hashPassword } from '../lib/auth.ts'
 import { generateVenue, venueCapacity } from '../lib/venue-gen.ts'
 import { generateInventory, holdBestAvailable } from '../lib/inventory.ts'
 import { finalize } from '../lib/orders.ts'
+import { localToUtc, slugify } from '../lib/format.ts'
 import type { VenueKind } from '../lib/venue-gen.ts'
 
 if (db.prepare('SELECT count(*) AS n FROM users').get()!.n) {
@@ -22,19 +23,7 @@ function mulberry32(a: number) {
 const rnd = mulberry32(20260101)
 const int = (a: number, b: number) => a + Math.floor(rnd() * (b - a + 1))
 const pick = <T,>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)]
-const slugify = (s: string) => s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 const json = (o: unknown) => JSON.stringify(o)
-
-// Local wall-clock time in a tz -> UTC ISO (DST-correct).
-function localToUtc(y: number, m: number, d: number, h: number, min: number, tz: string): string {
-  const guess = Date.UTC(y, m, d, h, min)
-  const p = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' })
-      .formatToParts(new Date(guess)).map((x) => [x.type, +x.value]),
-  )
-  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute)
-  return new Date(guess - (asUtc - guess)).toISOString()
-}
 
 const cities: [string, string, number, number, number, string][] = [
   ['New York', 'NY', 40.7128, -74.006, 888, 'America/New_York'],
@@ -118,6 +107,8 @@ tx(() => {
   const member = db.prepare('INSERT INTO org_members (org_id, user_id, role) VALUES (?,?,?)')
   member.run(orgId, uid['organizer@ticketstorm.test'], 'owner')
   member.run(orgId, uid['scanner@ticketstorm.test'], 'scanner')
+
+  db.prepare("INSERT INTO feature_flags (key, enabled) VALUES ('require_event_approval', 0)").run()
 
   const venueRows = venues.map(([name, kind, ci, dLat = 0], i) => {
     const [, , lat, lng, , tz] = cities[ci]

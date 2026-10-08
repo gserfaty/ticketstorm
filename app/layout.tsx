@@ -4,6 +4,7 @@ import Link from 'next/link'
 import './globals.css'
 import { listCities } from '../lib/geo.ts'
 import { runJobsThrottled } from '../lib/jobs.ts'
+import { db } from '../lib/db.ts'
 import { getUser } from '../lib/session.ts'
 import SearchBox from '../components/SearchBox.tsx'
 import { setCity } from './actions.ts'
@@ -13,6 +14,7 @@ export const metadata = { title: 'TicketStorm', description: 'Live events, ticke
 export default async function RootLayout({ children }: { children: ReactNode }) {
   runJobsThrottled()
   const user = await getUser()
+  const isMember = !!user && !!db.prepare('SELECT 1 FROM org_members WHERE user_id = ?').get(user.id)
   const city = (await cookies()).get('city')?.value ?? ''
   return (
     <html lang="en">
@@ -39,6 +41,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <span>{user.email}</span>
                   <Link href="/tickets">My tickets</Link>
                   <Link href="/orders">Orders</Link>
+                  <Link href={isMember ? '/organizer' : '/become-organizer'}>{isMember ? 'Organizer' : 'Sell tickets'}</Link>
+                  {user.role === 'admin' && <Link href="/admin">Admin</Link>}
                   <form action="/logout" method="post"><button>Log out</button></form>
                 </>
               ) : (

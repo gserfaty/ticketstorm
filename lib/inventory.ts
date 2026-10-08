@@ -19,20 +19,22 @@ const marks = (n: number) => Array(n).fill('?').join(',')
 // gets the event's bundle level instead. Idempotent.
 export function generateInventory(eventId: number, bundleSection: string | null = null) {
   const level = (name: string) => `(SELECT id FROM price_levels WHERE event_id = ev.id AND name = ${name})`
+  // organizer-made events name their levels freely: anything unnamed starts on the cheapest level (re-assign in the inventory tool)
+  const fallback = '(SELECT id FROM price_levels WHERE event_id = ev.id AND event_ids IS NULL ORDER BY price_cents, id LIMIT 1)'
   db.prepare(
     `INSERT OR IGNORE INTO inventory (event_id, section_id, seat_id, price_level_id)
-     SELECT ev.id, s.id, st.id, CASE
+     SELECT ev.id, s.id, st.id, coalesce(CASE
        WHEN st.accessible = 1 OR st.companion = 1 THEN ${level("'Accessible'")}
        WHEN s.name = ? THEN (SELECT id FROM price_levels WHERE event_id = ev.id AND event_ids IS NOT NULL)
        WHEN s.rank <= 1 THEN ${level("'VIP'")}
        WHEN s.rank = 2 THEN ${level("'Premium'")}
-       ELSE ${level("'General'")} END
+       ELSE ${level("'General'")} END, ${fallback})
      FROM events ev JOIN sections s ON s.venue_id = ev.venue_id JOIN seats st ON st.section_id = s.id WHERE ev.id = ?`,
   ).run(bundleSection, eventId)
   db.prepare(
     `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < (SELECT coalesce(max(capacity), 0) FROM sections WHERE kind = 'ga'))
      INSERT OR IGNORE INTO inventory (event_id, section_id, seat_id, slot, price_level_id)
-     SELECT ev.id, s.id, NULL, n.i, ${level("'Standing'")}
+     SELECT ev.id, s.id, NULL, n.i, coalesce(${level("'Standing'")}, ${fallback})
      FROM events ev JOIN sections s ON s.venue_id = ev.venue_id AND s.kind = 'ga' JOIN n ON n.i <= s.capacity WHERE ev.id = ?`,
   ).run(eventId)
 }

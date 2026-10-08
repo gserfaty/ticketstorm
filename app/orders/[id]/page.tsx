@@ -23,7 +23,7 @@ export default async function Order({ params, searchParams }: { params: Promise<
   const suffix = t ? `?t=${encodeURIComponent(t)}` : ''
   return (
     <>
-      <h1>Order #{o!.id} confirmed</h1>
+      <h1>Order #{o!.id} {o!.status === 'paid' ? 'confirmed' : o!.status}</h1>
       <p><Link href={`/events/${o!.slug}`}>{o!.title}</Link> · {o!.venue} · {fmtDateTimeTz(o!.starts_at, o!.tz)}</p>
       <p className="muted">Status: {o!.status}. Confirmation sent to {o!.email}.</p>
       <div className="card">

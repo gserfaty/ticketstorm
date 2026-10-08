@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers'
-import { notFound, redirect } from 'next/navigation'
+import { redirect } from 'next/navigation'
 import { db, tx } from './db.ts'
 import { randomToken } from './auth.ts'
 import type { Viewer } from './orders.ts'
@@ -74,15 +74,20 @@ export async function requireUser(): Promise<User> {
 
 export async function requireAdmin(): Promise<User> {
   const u = await requireUser()
-  if (u.role !== 'admin') notFound()
+  if (u.role !== 'admin') redirect('/')
   return u
 }
 
+export function memberRole(userId: number, orgId: number): string | undefined {
+  return (db.prepare('SELECT role FROM org_members WHERE org_id = ? AND user_id = ?').get(orgId, userId) as { role: string } | undefined)?.role
+}
+
+// Always pass the org that OWNS the resource (event.org_id, venue.org_id), never one taken from the URL alone.
 export async function requireOrgRole(orgId: number, roles: string[]) {
   const u = await requireUser()
-  const m = db.prepare('SELECT role FROM org_members WHERE org_id = ? AND user_id = ?').get(orgId, u.id) as { role: string } | undefined
-  if (!m || !roles.includes(m.role)) notFound()
-  return { user: u, role: m.role }
+  const role = memberRole(u.id, orgId)
+  if (!role || !roles.includes(role)) redirect('/')
+  return { user: u, role }
 }
 
 // Fresh token on login (no session fixation); the old guest session is discarded.

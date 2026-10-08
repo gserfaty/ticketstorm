@@ -51,3 +51,5 @@ pre { white-space:pre-wrap; word-break:break-word; margin:0 }
 @media (max-width:600px) { main { padding:.5rem } .map-controls label, .map-controls select { flex:1 1 40% } }
 a.btn { display:inline-block; padding:.4rem .6rem; border-radius:6px; background:var(--accent); color:#fff; text-decoration:none }
 table td { padding:.15rem 1rem .15rem 0 }
+textarea { font:inherit; padding:.4rem .6rem; border-radius:6px; border:1px solid #445; background:#0b0c1a; color:var(--fg) }
+.scan-ok { color:var(--ok) } .scan-bad { color:var(--bad) }
