@@ -61,6 +61,54 @@ export function createEvent(orgId: number, f: EventForm, artistId?: number): num
   return id
 }
 
+// ---- clone and series ----
+type EvRow = { org_id: number; venue_id: number; series_key: string | null; title: string; category: string; genre: string | null; starts_at: string; doors_at: string | null; image: string | null; description: string | null; info: string | null; fee_rule: string | null; transfer_rule: string | null; resale_rule: string | null; hold_minutes: number; ticket_limit: number; order_limit: number | null; print_ok: number; willcall_ok: number; non_transferable: number }
+
+// A draft copy of an event at a new start (default: a week later): details, rules, price levels, offers and add-ons (nothing sold, no bundles, no presale windows).
+// The copy is a draft: publish it like any other, which generates its inventory.
+function copyEvent(src: EvRow & { id: number }, startsAt: string, seriesKey: string | null): number {
+  const shift = Date.parse(startsAt) - Date.parse(src.starts_at)
+  const id = Number(
+    db
+      .prepare(
+        `INSERT INTO events (org_id, venue_id, series_key, slug, title, category, genre, starts_at, doors_at, image, description, info, fee_rule, transfer_rule, resale_rule, hold_minutes, ticket_limit, order_limit, print_ok, willcall_ok, non_transferable, status)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft')`,
+      )
+      .run(src.org_id, src.venue_id, seriesKey, unique(src.title), src.title, src.category, src.genre, startsAt, src.doors_at ? new Date(Date.parse(src.doors_at) + shift).toISOString() : null, src.image, src.description, src.info, src.fee_rule, src.transfer_rule, src.resale_rule, src.hold_minutes, src.ticket_limit, src.order_limit, src.print_ok, src.willcall_ok, src.non_transferable).lastInsertRowid,
+  )
+  db.prepare('INSERT INTO event_artists (event_id, artist_id, billing) SELECT ?, artist_id, billing FROM event_artists WHERE event_id = ?').run(id, src.id)
+  db.prepare('INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type, dyn_min_cents, dyn_max_cents, dyn_k, dyn_j, perks) SELECT ?, name, color, price_cents, ticket_type, dyn_min_cents, dyn_max_cents, dyn_k, dyn_j, perks FROM price_levels WHERE event_id = ? AND event_ids IS NULL').run(id, src.id)
+  db.prepare('INSERT INTO offers (event_id, name, pct_off) SELECT ?, name, pct_off FROM offers WHERE event_id = ?').run(id, src.id)
+  db.prepare('INSERT INTO addons (event_id, kind, name, price_cents, inventory) SELECT ?, kind, name, price_cents, inventory FROM addons WHERE event_id = ?').run(id, src.id)
+  return id
+}
+const srcEvent = (eventId: number) => {
+  const e = db.prepare('SELECT * FROM events WHERE id = ?').get(eventId) as (EvRow & { id: number }) | undefined
+  if (!e) throw new UserError('Event not found')
+  return e
+}
+
+export function cloneEvent(eventId: number, startsAt?: string | null): number {
+  return tx(() => {
+    const e = srcEvent(eventId)
+    const at = startsAt ?? new Date(Date.parse(e.starts_at) + 7 * 86_400_000).toISOString()
+    if (Date.parse(at) < Date.now()) throw new UserError('Pick a start date in the future')
+    return copyEvent(e, at, e.series_key)
+  })
+}
+
+// "Series template": N more dates every `everyDays` days after the source event, all drafts sharing one series key (so fans see "Other dates" and can exchange between them).
+export function createSeries(eventId: number, count: unknown, everyDays: unknown): number[] {
+  const n = int(count, 1, 12, 'Number of dates')
+  const gap = int(everyDays, 1, 90, 'Days between dates')
+  return tx(() => {
+    const e = srcEvent(eventId)
+    const key = e.series_key ?? `series-${eventId}`
+    if (!e.series_key) db.prepare('UPDATE events SET series_key = ? WHERE id = ?').run(key, eventId)
+    return Array.from({ length: n }, (_, i) => copyEvent(e, new Date(Date.parse(e.starts_at) + (i + 1) * gap * 86_400_000).toISOString(), key))
+  })
+}
+
 // Public event-page details (events.info JSON). Set times: one per line, "HH:MM Act" in venue time. Other keys in info are kept.
 export function setEventInfo(eventId: number, f: { age: string; bag: string; notices: string; setTimes: string }) {
   if (f.age.length > 60) throw new UserError('Age limit is limited to 60 characters')

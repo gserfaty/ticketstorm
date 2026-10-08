@@ -148,3 +148,17 @@ export function reverseResale(orderId: number) {
   if (!l || db.prepare('SELECT 1 FROM ledger WHERE ref = ?').get(`listing:${l.id}:reversal`)) return
   db.prepare('INSERT INTO ledger (account, kind, amount, ref) SELECT account, kind, -amount, ? FROM ledger WHERE ref = ?').run(`listing:${l.id}:reversal`, `listing:${l.id}`)
 }
+
+// Customer export for ONE organization: one row per buyer email over orders of that org's events that were charged. Cells go through csvCell, so a
+// name or email starting with = + - @ cannot run as a spreadsheet formula.
+export function customersCsv(orgId: number): { csv: string; rows: number } {
+  const rows = db
+    .prepare(
+      `SELECT o.email, coalesce(max(u.name), '') AS name, count(*) AS orders, coalesce(sum((SELECT count(*) FROM order_items WHERE order_id = o.id AND kind = 'ticket')), 0) AS tickets,
+         sum(o.total) AS spent, min(o.created_at) AS first_order, max(o.created_at) AS last_order
+       FROM orders o JOIN events e ON e.id = o.event_id LEFT JOIN users u ON u.id = o.user_id
+       WHERE e.org_id = ? AND ${CHARGED} AND o.status IN ('paid','partially_refunded') GROUP BY o.email ORDER BY o.email`,
+    )
+    .all(orgId) as { email: string; name: string; orders: number; tickets: number; spent: number; first_order: string; last_order: string }[]
+  return { csv: toCsv([['email', 'name', 'orders', 'tickets', 'spent_cents', 'first_order', 'last_order'], ...rows.map((r) => [r.email, r.name, r.orders, r.tickets, r.spent, r.first_order, r.last_order])]), rows: rows.length }
+}

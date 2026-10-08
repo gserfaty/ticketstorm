@@ -27,7 +27,7 @@ export default async function OrgHome({ params, searchParams }: { params: Promis
       <Flash {...sp} />
       {org!.status !== 'approved' && <p className="muted">Pending admin approval: you can prepare drafts but not publish.</p>}
       <p>
-        {manage && <><Link href={`/organizer/${orgId}/events/new`}>New event</Link> · <Link href={`/organizer/${orgId}/members`}>Members</Link></>}
+        {manage && <><Link href={`/organizer/${orgId}/events/new`}>New event</Link> · <Link href={`/organizer/${orgId}/members`}>Members</Link> · <Link href={`/organizer/${orgId}/developers`}>Developers</Link></>}
         {FINANCE_ROLES.includes(role) && <>{manage ? ' · ' : ''}<Link href={`/organizer/${orgId}/payouts`}>Payouts and settlement</Link></>}
       </p>
       <h2>Events</h2>

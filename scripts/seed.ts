@@ -9,6 +9,8 @@ import { finalize } from '../lib/orders.ts'
 import { createListing } from '../lib/resale.ts'
 import { makeOffer } from '../lib/offers.ts'
 import { purchaseGift, redeemToCredit } from '../lib/giftcards.ts'
+import { createHash } from 'node:crypto'
+import { addWebhook } from '../lib/devtools.ts'
 import { decideReview, submitReview } from '../lib/reviews.ts'
 import { settleEvent } from '../lib/reports.ts'
 import { addMessage, createContact } from '../lib/support.ts'
@@ -18,6 +20,8 @@ import { toggleFavorite } from '../lib/favorites.ts'
 import { localToUtc, slugify } from '../lib/format.ts'
 import type { VenueKind } from '../lib/venue-gen.ts'
 
+// the demo API key of Storm Live (dev only; documented in the README). Real keys are random and shown once.
+const DEMO_KEY = `tsk_${'0123456789abcdef'.repeat(3)}`
 process.env.FRAUD_RANDOM_PCT = '0' // the seed's own orders must not land in review by chance; scripted review cases are below
 
 if (db.prepare('SELECT count(*) AS n FROM users').get()!.n) {
@@ -562,6 +566,19 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   decideReview((db.prepare("SELECT id FROM users WHERE role = 'admin'").get() as { id: number }).id, 1, true)
   submitReview(fan, 'venue', venueId, 4, 'Good sightlines from the 200 level. Parking is tight.')
   db.prepare("UPDATE users SET notif_prefs = ? WHERE id = ?").run(json({ marketing_email: true }), fan)
+}
+
+// P12B (org tools): Storm Live gets a demo API key (documented in the README: dev only), a webhook, and one order placed AFTER the webhook so a signed delivery is in /dev/outbox.
+{
+  const org = (db.prepare("SELECT id FROM orgs WHERE name = 'Storm Live'").get() as { id: number }).id
+  const owner = (db.prepare("SELECT id FROM users WHERE email = 'organizer@ticketstorm.test'").get() as { id: number }).id
+  db.prepare('INSERT INTO api_keys (org_id, name, prefix, key_hash, created_by) VALUES (?,?,?,?,?)').run(org, 'Demo key (seed)', DEMO_KEY.slice(0, 8), createHash('sha256').update(DEMO_KEY).digest('hex'), owner)
+  addWebhook(org, 'https://example.com/hooks/ticketstorm')
+  const fan = db.prepare("SELECT id, email FROM users WHERE email = 'fan@ticketstorm.test'").get() as { id: number; email: string }
+  const wed = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-empire-wednesday'").get() as { id: number }
+  const sess = { sessionToken: 'seed-webhook-session', userId: fan.id }
+  const held = holdBestAvailable(wed.id, sess, 1)
+  finalize({ holdId: held.holdId, sessionToken: sess.sessionToken, userId: fan.id, email: fan.email, key: 'seed-webhook-order', method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false, billing: { name: 'Frankie Fan', address: '1 Main St', city: 'New York', zip: '10001' } })
 }
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

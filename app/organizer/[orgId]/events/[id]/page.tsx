@@ -6,7 +6,7 @@ import { fmtDateTimeTz, toLocalInput } from '../../../../../lib/format.ts'
 import { attendance } from '../../../../../lib/scan.ts'
 import { loadEvent } from '../../../guard.ts'
 import { resaleRule, transferRule } from '../../../../../lib/rules.ts'
-import { cancelEvent, changeDate, publish, saveDeliveryRulesAction, saveEvent, saveInfo, saveResaleRuleAction, saveTransferRuleAction } from '../../../actions.ts'
+import { cancelEvent, cloneEventAction, createSeriesAction, changeDate, publish, saveDeliveryRulesAction, saveEvent, saveInfo, saveResaleRuleAction, saveTransferRuleAction } from '../../../actions.ts'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,7 +32,7 @@ export default async function ManageEvent({ params, searchParams }: { params: Pr
       <Flash {...(await searchParams)} />
       <p>{e.venue} · {fmtDateTimeTz(e.starts_at, e.tz)}{!draft && !e.approved && <> · <strong>awaiting admin approval</strong></>}</p>
       <p>
-        <Link href={`${base}/pricing`}>Pricing and on-sale</Link> · <Link href={`${base}/inventory`}>Inventory</Link> · <Link href={`${base}/orders`}>Orders</Link> · <Link href={`${base}/reports`}>Reports</Link> · <Link href={`${base}/marketing`}>Marketing</Link> · <Link href={`${base}/access`}>Presales</Link> · <Link href={`${base}/queue`}>Waiting room</Link> · <Link href={`/scan/${e.id}`}>Scanner</Link> · <Link href={`/events/${e.slug}`}>Public page</Link>
+        <Link href={`${base}/pricing`}>Pricing and on-sale</Link> · <Link href={`${base}/inventory`}>Inventory</Link> · <Link href={`${base}/orders`}>Orders</Link> · <Link href={`${base}/guests`}>Guest list</Link> · <Link href={`${base}/reports`}>Reports</Link> · <Link href={`${base}/marketing`}>Marketing</Link> · <Link href={`${base}/access`}>Presales</Link> · <Link href={`${base}/queue`}>Waiting room</Link> · <Link href={`/scan/${e.id}`}>Scanner</Link> · <Link href={`/events/${e.slug}`}>Public page</Link>
       </p>
       <p className="muted">{stats.orders} orders · attendance {att.scanned}/{att.total}{stats.failed > 0 && ` · ${stats.failed} refund(s) failed (admin notified)`}</p>
 
@@ -87,6 +87,20 @@ export default async function ManageEvent({ params, searchParams }: { params: Pr
         <label><input type="checkbox" name="inherit" /> Use the platform defaults instead</label>
         <button>Save resale rule</button>
       </form>
+
+      <h2>Clone and series</h2>
+      <form action={cloneEventAction} className="stack">
+        {hidden}
+        <label>Clone as a draft starting ({e.tz}, blank = a week later) <input type="datetime-local" name="startsAt" /></label>
+        <button>Clone event</button>
+      </form>
+      <form action={createSeriesAction} className="stack">
+        {hidden}
+        <label>More dates <input name="count" type="number" min="1" max="12" defaultValue="3" /></label>
+        <label>Days apart <input name="everyDays" type="number" min="1" max="90" defaultValue="7" /></label>
+        <button>Create series of draft dates</button>
+      </form>
+      <p className="muted"><Link href={`/organizer/${orgId}/developers`}>API keys, webhooks, embed widget and customer export</Link></p>
 
       {draft && (
         <form action={publish} className="stack">

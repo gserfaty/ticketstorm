@@ -741,3 +741,24 @@ CREATE TABLE IF NOT EXISTS reviews (
   UNIQUE (user_id, event_id),
   UNIQUE (user_id, venue_id)
 );
+
+-- Organization developer tools. API keys are stored only as a SHA-256 hash (the key is shown once); webhook deliveries are rows in outbox channel 'webhook'.
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  org_id INTEGER NOT NULL REFERENCES orgs(id),
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  created_by INTEGER REFERENCES users(id),
+  last_used_at TEXT,
+  revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS webhooks (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  org_id INTEGER NOT NULL REFERENCES orgs(id),
+  url TEXT NOT NULL,
+  secret TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS webhooks_org ON webhooks(org_id);

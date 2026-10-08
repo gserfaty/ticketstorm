@@ -9,6 +9,7 @@ import { refundEvent, sendConfirmation } from '../../lib/orders.ts'
 import { compTickets, markPickedUp, moveSeat, ORDER_ROLES, refundFromForm } from '../../lib/orderadmin.ts'
 import * as org from '../../lib/organizer.ts'
 import { audit, UserError } from '../../lib/platform.ts'
+import { addWebhook, createApiKey, removeWebhook, revokeApiKey } from '../../lib/devtools.ts'
 import { sendCampaign } from '../../lib/campaign.ts'
 import { requestPayout } from '../../lib/payouts.ts'
 import { settleEvent } from '../../lib/reports.ts'
@@ -396,4 +397,55 @@ export async function orderComp(f: FormData) {
 export async function orderPickup(f: FormData) {
   const o = await authOrder(f)
   run(o.back, () => { markPickedUp(o.id, o.user.id); audit(o.user.id, 'order.pickup', `order:${o.id}`) }, 'Marked as picked up')
+}
+
+// ---- clone, series, developer tools ----
+export async function cloneEventAction(f: FormData) {
+  const e = await authEvent(f)
+  let id = 0
+  run(e.back, () => {
+    id = org.cloneEvent(e.id, text(f, 'startsAt') ? parseLocal(text(f, 'startsAt'), e.tz) : null)
+    audit(e.user.id, 'event.clone', `event:${id}`, { from: e.id })
+  })
+}
+
+export async function createSeriesAction(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => {
+    const ids = org.createSeries(e.id, f.get('count'), f.get('everyDays'))
+    audit(e.user.id, 'event.series', `event:${e.id}`, { created: ids })
+  }, 'Draft dates created: find them in your event list')
+}
+
+export type KeyState = { key?: string; error?: string }
+// The key is returned to the page ONCE (useActionState) and never stored in the clear.
+export async function createApiKeyAction(_: KeyState, f: FormData): Promise<KeyState> {
+  const orgId = num(f, 'orgId')
+  const { user } = await requireOrgRole(orgId, MANAGE)
+  try {
+    const key = createApiKey(orgId, text(f, 'name'), user.id)
+    audit(user.id, 'apikey.create', `org:${orgId}`, { name: text(f, 'name'), prefix: key.slice(0, 8) })
+    return { key }
+  } catch (e) {
+    if (e instanceof UserError) return { error: e.message }
+    throw e
+  }
+}
+
+export async function revokeApiKeyAction(f: FormData) {
+  const orgId = num(f, 'orgId')
+  const { user } = await requireOrgRole(orgId, MANAGE)
+  run(`/organizer/${orgId}/developers`, () => { revokeApiKey(orgId, num(f, 'keyId')); audit(user.id, 'apikey.revoke', `org:${orgId}`, { keyId: num(f, 'keyId') }) }, 'Key revoked')
+}
+
+export async function addWebhookAction(f: FormData) {
+  const orgId = num(f, 'orgId')
+  const { user } = await requireOrgRole(orgId, MANAGE)
+  run(`/organizer/${orgId}/developers`, () => { addWebhook(orgId, text(f, 'url')); audit(user.id, 'webhook.add', `org:${orgId}`, { url: text(f, 'url').slice(0, 200) }) }, 'Webhook added')
+}
+
+export async function removeWebhookAction(f: FormData) {
+  const orgId = num(f, 'orgId')
+  const { user } = await requireOrgRole(orgId, MANAGE)
+  run(`/organizer/${orgId}/developers`, () => { removeWebhook(orgId, num(f, 'webhookId')); audit(user.id, 'webhook.remove', `org:${orgId}`) }, 'Webhook removed')
 }
