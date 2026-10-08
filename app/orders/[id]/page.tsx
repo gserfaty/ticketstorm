@@ -93,6 +93,7 @@ export default async function Order({ params, searchParams }: { params: Promise<
           <form action={requestRefund}>
             {hidden}
             <p>This event was rescheduled. You can get a full refund until {fmtDateTime(ev.refund_window_until!, o!.tz)}.</p>
+            {o!.user_id !== null && o!.source !== 'resale' && <label><input type="checkbox" name="credit" /> Refund as account credit (instant, usable at checkout)</label>}
             <button>Refund this order</button>
           </form>
         )}

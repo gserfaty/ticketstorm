@@ -5,6 +5,7 @@ import { db, tx } from '../../lib/db.ts'
 import { approveReview, holdOrder } from '../../lib/fraud.ts'
 import { refundFromForm } from '../../lib/orderadmin.ts'
 import { refundEvent, refundOrder, sendConfirmation } from '../../lib/orders.ts'
+import { resolveDispute } from '../../lib/disputes.ts'
 import { decideClaim } from '../../lib/protection.ts'
 import { audit, setFlag, UserError } from '../../lib/platform.ts'
 import { setCityTax, setFeeDefaults } from '../../lib/pricing.ts'
@@ -174,7 +175,7 @@ export async function adminOrderRefund(f: FormData) {
   const id = num(f, 'orderId')
   const mode = text(f, 'mode')
   run('/admin/orders', () => {
-    const r = refundFromForm(id, mode, f.getAll('item').map(Number), f.get('fees') === 'on', `admin:${admin.id}`)
+    const r = refundFromForm(id, mode, f.getAll('item').map(Number), f.get('fees') === 'on', `admin:${admin.id}`, f.get('credit') === 'on')
     audit(admin.id, `order.${mode === 'void' ? 'void' : 'refund'}`, `order:${id}`, { mode, items: f.getAll('item'), amount: r.amount })
   }, 'Done')
 }
@@ -281,4 +282,12 @@ export async function cancelScalperOrders(f: FormData) {
   audit(admin.id, 'scalper.cancel_orders', `event:${num(f, 'eventId')}`, { kind: text(f, 'kind'), key: text(f, 'key').slice(0, 12), cancelled: r.cancelled, failed: r.failed })
   if (r.failed.length) refuse('/admin/scalpers', `Cancelled ${r.cancelled.length}; ${r.failed.length} failed: ${r.failed.map((x) => `#${x.id} ${x.why}`).join('; ')}`)
   done('/admin/scalpers', `Cancelled and refunded ${r.cancelled.length} order(s)`)
+}
+
+export async function disputeDecision(f: FormData) {
+  const admin = await requireAdmin()
+  run('/admin/disputes', () => {
+    const r = resolveDispute(admin.id, num(f, 'disputeId'), text(f, 'outcome'), text(f, 'note'))
+    audit(admin.id, `dispute.${text(f, 'outcome')}`, `order:${r.orderId}`, { disputeId: num(f, 'disputeId'), refunded: r.refunded, note: text(f, 'note') })
+  }, 'Dispute resolved')
 }

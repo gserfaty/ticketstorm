@@ -38,7 +38,7 @@ export async function requestRefund(f: FormData) {
     if (!['paid', 'partially_refunded'].includes(o.status)) throw new UserError(`An order that is ${o.status} cannot be refunded`)
     if (db.prepare("SELECT 1 FROM tickets WHERE order_id = ? AND status = 'used'").get(o.id)) throw new UserError('Tickets that were already scanned cannot be refunded')
     if (!heldByBuyer(o.id)) throw new UserError('Some of these tickets were transferred or sold, so the order cannot be refunded here')
-    refundOrder(o.id, { reason: 'rescheduled_window' })
+    refundOrder(o.id, { reason: 'rescheduled_window', credit: field(f, 'credit') === 'on' })
   } catch (e) {
     if (e instanceof UserError) done(back, 'error', e.message)
     throw e

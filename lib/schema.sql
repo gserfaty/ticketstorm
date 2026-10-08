@@ -377,7 +377,7 @@ CREATE TABLE IF NOT EXISTS payments (
   hold_id INTEGER REFERENCES holds(id),
   session_token TEXT,
   kind TEXT NOT NULL DEFAULT 'charge' CHECK (kind IN ('charge','refund','payout')),
-  method TEXT NOT NULL DEFAULT 'card' CHECK (method IN ('card','saved','applepay','googlepay','paypal','giftcard','installments','exchange')),
+  method TEXT NOT NULL DEFAULT 'card' CHECK (method IN ('card','saved','applepay','googlepay','paypal','giftcard','installments','exchange','credit','chargeback')), -- credit / giftcard: stored value paid part of an order; chargeback: refund the bank forced
   amount INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('succeeded','declined','requires_3ds','pending')),
   brand TEXT,
@@ -678,3 +678,48 @@ CREATE TABLE IF NOT EXISTS resale_offers (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_pending_offer ON resale_offers(listing_id, buyer_id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS offers_listing ON resale_offers(listing_id);
+
+-- Account credit: signed rows, balance = SUM(amount). Spending is ONE guarded INSERT ... SELECT, so a balance can never go negative.
+CREATE TABLE IF NOT EXISTS credits (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  amount INTEGER NOT NULL CHECK (amount != 0),
+  ref TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS credits_user ON credits(user_id);
+
+-- Chargebacks: opened for orders paid with the 0341 test card (the bank disputes the charge); an admin resolves them.
+CREATE TABLE IF NOT EXISTS disputes (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  order_id INTEGER NOT NULL UNIQUE REFERENCES orders(id),
+  amount INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','won','lost')),
+  note TEXT,
+  decided_by INTEGER REFERENCES users(id),
+  decided_at TEXT
+);
+
+-- Gift cards: the code is shown once (emailed) and only a keyed hash is kept. balance_cents can never go below 0.
+CREATE TABLE IF NOT EXISTS gift_cards (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  code_hash TEXT NOT NULL UNIQUE,
+  last4 TEXT NOT NULL,
+  initial_cents INTEGER NOT NULL CHECK (initial_cents > 0),
+  balance_cents INTEGER NOT NULL CHECK (balance_cents >= 0),
+  purchaser_id INTEGER REFERENCES users(id),
+  recipient_email TEXT NOT NULL,
+  message TEXT
+);
+
+-- Analytics funnel (view -> hold -> order). No personal data: no user, session or IP.
+CREATE TABLE IF NOT EXISTS events_log (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  kind TEXT NOT NULL CHECK (kind IN ('view','hold','order'))
+);
+CREATE INDEX IF NOT EXISTS events_log_event ON events_log(event_id, kind);

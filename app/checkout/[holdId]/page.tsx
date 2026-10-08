@@ -9,6 +9,7 @@ import { plan } from '../../../lib/installments.ts'
 import { money, fmtDateTimeTz } from '../../../lib/format.ts'
 import { currencyPref, getSession, getUser } from '../../../lib/session.ts'
 import { approx, displayCurrency } from '../../../lib/currency.ts'
+import { creditBalance } from '../../../lib/stored.ts'
 import { addressOf } from '../../../lib/account.ts'
 import { DELIVERY_LABEL } from '../../../lib/rules.ts'
 import type { Delivery } from '../../../lib/rules.ts'
@@ -108,7 +109,7 @@ export default async function Checkout({ params, searchParams }: { params: Promi
       {notice && <p className="notice">{notice}</p>}
       {q.promoError && <p className="error">{q.promoError}. Clear the promo code and update the order to continue.</p>}
       {error && <p className="error">{error}</p>}
-      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={cards} canSave={!!user} total={money(q.total)} totalCents={q.total} installments={parts?.map((p) => money(p.amount)) ?? null} captcha={newCaptcha()} deliveries={deliveries} prefill={prefill} express={express} />
+      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={cards} canSave={!!user} total={money(q.total)} totalCents={q.total} installments={parts?.map((p) => money(p.amount)) ?? null} captcha={newCaptcha()} deliveries={deliveries} prefill={prefill} express={express} creditCents={user ? creditBalance(user.id) : 0} />
       <p><Link href={`/events/${ev.slug}/tickets`}>Back to seat map</Link></p>
     </>
   )

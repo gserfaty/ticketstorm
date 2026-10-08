@@ -33,7 +33,7 @@ async function nativeWallet(method: string, cents: number): Promise<boolean> {
 }
 
 // Card number and CVC are never given a `name` that is logged or stored server-side; they are read once by the pay action.
-export default function PayForm({ action, holdId, idemKey, expiresAt, email, saved, canSave, total, totalCents, installments, captcha, deliveries, prefill, express }: {
+export default function PayForm({ action, holdId, idemKey, expiresAt, email, saved, canSave, total, totalCents, installments, captcha, deliveries, prefill, express, creditCents }: {
   action: (prev: PayState, f: FormData) => Promise<PayState>
   holdId: number
   idemKey: string
@@ -47,6 +47,7 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
   captcha: Captcha
   deliveries: [string, string][] // [value, label] the event offers; mobile first
   prefill?: { bname: string; baddress: string; bcity: string; bzip: string } // the account's saved address
+  creditCents?: number // account credit available to spend (accounts only)
   express?: boolean // saved card (first in `saved`) and saved address are filled in; only the CVC is left to type
 }) {
   const router = useRouter()
@@ -87,6 +88,10 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
       <input name="baddress" defaultValue={v.baddress} placeholder="Street address" required autoComplete="street-address" />
       <input name="bcity" defaultValue={v.bcity} placeholder="City" required autoComplete="address-level2" />
       <input name="bzip" defaultValue={v.bzip} placeholder="ZIP" required autoComplete="postal-code" />
+      <h2>Gift card and credit</h2>
+      <input name="giftcode" placeholder="Gift card code (optional)" aria-label="Gift card code" autoComplete="off" />
+      {!!creditCents && <label><input type="checkbox" name="usecredit" /> Use my account credit (${(creditCents / 100).toFixed(2)} available)</label>}
+      <p className="muted">A gift card or credit pays first; if it covers less than the total, the card below is charged only the rest.</p>
       <h2>Payment</h2>
       <div className="row" role="radiogroup" aria-label="Payment method">
         {METHODS.map(([k, name]) => <label key={k}><input type="radio" checked={method === k} onChange={() => setMethod(k)} /> {name}</label>)}

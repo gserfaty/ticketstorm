@@ -18,6 +18,7 @@ export default async function Admin() {
         <li><Link href="/admin/claims">Protection claims</Link> ({n("SELECT count(*) AS n FROM claims WHERE status = 'submitted'")} open)</li>
         <li><Link href="/admin/orders">Orders (search, refund, void)</Link></li>
         <li><Link href="/admin/refunds">Failed refunds</Link> ({n('SELECT count(*) AS n FROM orders WHERE refund_error IS NOT NULL')})</li>
+        <li><Link href="/admin/disputes">Chargebacks</Link> ({n("SELECT count(*) AS n FROM disputes WHERE status = 'open'")} open)</li>
         <li><Link href="/admin/payouts">Payouts</Link> ({n("SELECT count(*) AS n FROM payouts WHERE status = 'requested'")} requested)</li>
         <li><Link href="/admin/fraud">Fraud and bots</Link></li>
         <li><Link href="/admin/scalpers">Possible scalpers</Link> ({n("SELECT count(*) AS n FROM users WHERE flagged = 1")} flagged accounts)</li>

@@ -1,3 +1,4 @@
+import { logEvent } from './analytics.ts'
 import { db, tx } from './db.ts'
 import { eventState, orderLimit } from './events.ts'
 import { openWindowIds } from './access.ts'
@@ -175,6 +176,7 @@ function place(eventId: number, owner: Owner, qty: number, pick: (win: number[],
       .run(holdId, expiresAt, ...eventIds, ...all, ...win, nowIso)
     if (r.changes !== all.length) throw new HoldError('Those tickets were just taken')
     lockPrices(all)
+    logEvent(eventId, 'hold')
     return { holdId, expiresAt, ids }
   })
 }

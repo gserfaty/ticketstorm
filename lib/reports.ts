@@ -3,6 +3,7 @@ import { attendance } from './scan.ts'
 import { ledgerAdd } from './ledger.ts'
 import { localDate } from './format.ts'
 import { UserError } from './platform.ts'
+import { refundAccount } from './stored.ts'
 
 // ---- CSV ----
 // A cell that starts with = + - @ (or tab / CR) is a formula to Excel and Sheets: prefix a quote. Numbers are never prefixed (a refund may be negative).
@@ -123,18 +124,18 @@ export function settleEvent(eventId: number, actorId: number | null, now = Date.
 export function reverseAfterSettlement(orderId: number) {
   const o = db
     .prepare(
-      `SELECT o.source, o.subtotal - o.discount AS face, o.fees, o.tax, o.protection, o.total, s.org_id, s.last_refund_payment_id AS after FROM orders o
+      `SELECT o.user_id, o.source, o.subtotal - o.discount AS face, o.fees, o.tax, o.protection, o.total, s.org_id, s.last_refund_payment_id AS after FROM orders o
        JOIN settlements s ON s.event_id = o.event_id WHERE o.id = ?`,
     )
-    .get(orderId) as { source: string | null; face: number; fees: number; tax: number; protection: number; total: number; org_id: number; after: number } | undefined
+    .get(orderId) as { user_id: number | null; source: string | null; face: number; fees: number; tax: number; protection: number; total: number; org_id: number; after: number } | undefined
   if (!o || o.source === 'resale' || o.total <= 0) return
-  const pays = db.prepare("SELECT id, amount FROM payments WHERE order_id = ? AND kind = 'refund' AND status = 'succeeded' AND method != 'exchange' AND id > ? ORDER BY id").all(orderId, o.after) as { id: number; amount: number }[]
+  const pays = db.prepare("SELECT id, amount, method, (SELECT meta FROM payments WHERE id = payments.parent_id) AS pmeta FROM payments WHERE order_id = ? AND kind = 'refund' AND status = 'succeeded' AND method != 'exchange' AND id > ? ORDER BY id").all(orderId, o.after) as { id: number; amount: number; method: string; pmeta: string | null }[]
   for (const p of pays) {
     const ref = `refund:payment:${p.id}`
     if (db.prepare('SELECT 1 FROM ledger WHERE ref = ?').get(ref)) continue
     const platform = Math.round((p.amount * (o.fees + o.protection)) / o.total)
     const tax = Math.round((p.amount * o.tax) / o.total)
-    ledgerAdd('cash', 'refund', p.amount, ref)
+    ledgerAdd(refundAccount(p.method, p.pmeta, o.user_id), 'refund', p.amount, ref) // cash, or the buyer's credit / gift card when the refund stays on the platform
     ledgerAdd(`org:${o.org_id}`, 'refund', -(p.amount - platform - tax), ref)
     ledgerAdd('platform', 'refund', -platform, ref)
     ledgerAdd('tax', 'refund', -tax, ref)

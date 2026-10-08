@@ -343,7 +343,7 @@ export async function orderRefund(f: FormData) {
   const o = await authOrder(f)
   const mode = text(f, 'mode')
   run(o.back, () => {
-    const r = refundFromForm(o.id, mode, f.getAll('item').map(Number), f.get('fees') === 'on', `organizer:${o.user.id}`)
+    const r = refundFromForm(o.id, mode, f.getAll('item').map(Number), f.get('fees') === 'on', `organizer:${o.user.id}`, f.get('credit') === 'on')
     audit(o.user.id, `order.${mode === 'void' ? 'void' : 'refund'}`, `order:${o.id}`, { mode, items: f.getAll('item'), fees: f.get('fees') === 'on', amount: r.amount })
   }, 'Done')
 }

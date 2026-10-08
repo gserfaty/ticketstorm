@@ -45,7 +45,7 @@ const BEHAVIOUR: Record<string, Outcome> = {
 }
 export const charge = (last4: string): Outcome => BEHAVIOUR[last4] ?? { status: 'succeeded' }
 
-export type Method = 'card' | 'saved' | 'applepay' | 'googlepay' | 'paypal' | 'installments'
+export type Method = 'card' | 'saved' | 'applepay' | 'googlepay' | 'paypal' | 'installments' | 'giftcard' | 'credit' // the last two: an order fully paid with stored value
 export type Payment = { id: number; status: string; order_id: number | null; decline_code: string | null; hold_id: number | null; session_token: string | null; amount: number; brand: string | null; last4: string | null; meta: string | null; idempotency_key: string }
 
 // Idempotent: the UNIQUE idempotency_key is the guard. A repeated key returns the first row and charges nothing.
@@ -78,8 +78,10 @@ export function refund(paymentId: number, amount?: number, via?: string) {
   const left = orig.amount - refundedFrom(paymentId)
   const amt = amount ?? left
   if (!Number.isInteger(amt) || amt < 1 || amt > left) throw new Error('Refund exceeds what was paid')
-  const method = via ?? (orig.method === 'exchange' ? 'card' : orig.method) // returning exchange credit goes back to the card it came from
-  const failed = orig.last4 === '0341' && method !== 'exchange'
+  // stored value (credit, gift card) always goes back to where it came from; `via` only redirects what was paid by card
+  const stored = orig.method === 'credit' || orig.method === 'giftcard'
+  const method = stored ? orig.method : (via ?? (orig.method === 'exchange' ? 'card' : orig.method)) // returning exchange credit goes back to the card it came from
+  const failed = orig.last4 === '0341' && !stored && !['exchange', 'credit', 'chargeback'].includes(method) // the bank's own chargeback and credit never fail
   db.prepare(
     `INSERT INTO payments (order_id, kind, method, amount, status, brand, last4, decline_code, parent_id, idempotency_key) VALUES (?, 'refund', ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(orig.order_id, method, amt, failed ? 'declined' : 'succeeded', orig.brand, orig.last4, failed ? 'refund_failed' : null, paymentId, `refund-${paymentId}-${randomBytes(6).toString('hex')}`)

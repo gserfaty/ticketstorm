@@ -14,6 +14,7 @@ import { registerVerifiedFan, unlockPresale } from '../../access/actions.ts'
 import Heart from '../../../components/Heart.tsx'
 import ShareButton from '../../../components/ShareButton.tsx'
 import { fmtDateTime, fmtDateTimeTz, localDate, money } from '../../../lib/format.ts'
+import { logEvent } from '../../../lib/analytics.ts'
 import { relatedEvents, viewingNow } from '../../../lib/discover.ts'
 import { pageMeta } from '../../../lib/seo.ts'
 import { weather } from '../../../lib/weather.ts'
@@ -32,6 +33,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 export default async function EventPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ error?: string; notice?: string; code?: string }> }) {
   const e = getEvent((await params).slug)
   if (!e) notFound()
+  if (e!.status !== 'draft') logEvent(e!.id, 'view')
   const sp = await searchParams
   const nowIso = new Date().toISOString()
   const user = await getUser()

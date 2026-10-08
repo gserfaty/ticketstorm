@@ -14,6 +14,10 @@ import { addInstallments, plan } from './installments.ts'
 import { UserError } from './platform.ts'
 import { assertDelivery } from './rules.ts'
 import { flagScalpers } from './scalpers.ts'
+import { applyStored, planStored, settleStoredRefunds } from './stored.ts'
+import { usableGift } from './giftcards.ts'
+import { openDispute } from './disputes.ts'
+import { logEvent } from './analytics.ts'
 
 export type PayInput = {
   holdId: number
@@ -30,6 +34,8 @@ export type PayInput = {
   billing: { name: string; address: string; city: string; zip: string }
   src?: string // marketing source slug (validated by the caller)
   delivery?: string // mobile (default) | print | willcall; checked against the event's flags in finalize
+  giftCode?: string // gift card typed at checkout: pays part (or all) of the total
+  useCredit?: boolean // spend account credit first
   ip?: string // client IP, for scalper detection
   cardFp?: string // card fingerprint (HMAC of the number), for scalper detection; never the card itself
 }
@@ -39,7 +45,7 @@ export const validSrc = (s?: string | null): s is string => !!s && /^[a-z0-9][a-
 // add-on kinds that get a scannable pass
 export const PASS_KINDS = ['parking', 'hospitality']
 
-type Meta = Pick<PayInput, 'userId' | 'email' | 'exp' | 'save' | 'billing' | 'src' | 'delivery' | 'ip' | 'cardFp'> & { total?: number; installments?: boolean } // total: full price when the payment is only the first quarter
+type Meta = Pick<PayInput, 'userId' | 'email' | 'exp' | 'save' | 'billing' | 'src' | 'delivery' | 'ip' | 'cardFp'> & { total?: number; installments?: boolean; gift?: { id: number; amount: number }; credit?: number } // total: full price when the payment is only the first quarter
 
 // The session's active, unexpired hold, or undefined. Ownership is the session token, never a user-supplied id alone.
 export function liveHold(holdId: number, sessionToken: string) {
@@ -85,7 +91,18 @@ export function finalize(i: PayInput): PayResult {
       meta.total = q.total
       meta.installments = true
     }
-    const { payment } = recordCharge({ key: i.key, holdId: i.holdId, sessionToken: i.sessionToken, amount, method, brand: i.brand, last4: i.last4, meta })
+    // Stored value (gift card, then account credit) pays first; the card is charged only the rest. The balances themselves are taken, guarded, when
+    // the order is created, so a decline or an abandoned 3-D Secure leaves them untouched.
+    if (i.giftCode || i.useCredit) {
+      if (i.installments) throw new HoldError('Pay in 4 cannot be combined with a gift card or account credit', 409)
+      const plan = planStored(i.userId, q.total, i.giftCode ? usableGift(i.giftCode) : undefined, !!i.useCredit)
+      if (plan.gift) meta.gift = plan.gift
+      if (plan.credit) meta.credit = plan.credit
+      meta.total = q.total
+      amount = plan.card
+      if (amount === 0) method = plan.gift ? 'giftcard' : 'credit'
+    }
+    const { payment } = recordCharge({ key: i.key, holdId: i.holdId, sessionToken: i.sessionToken, amount, method, brand: amount === 0 ? 'Stored value' : i.brand, last4: amount === 0 ? '' : i.last4, meta })
     return resolve(payment, i.sessionToken)
   })
 }
@@ -146,6 +163,9 @@ function createOrder(p: Payment): number {
   db.prepare("INSERT INTO order_items (order_id, kind, unit_cents, fee_cents, tax_cents) VALUES (?, 'fee', 0, ?, 0)").run(order.id, q.orderFee)
   if (q.protection) db.prepare("INSERT INTO order_items (order_id, kind, unit_cents) VALUES (?, 'protection', ?)").run(order.id, q.protection)
   db.prepare('UPDATE payments SET order_id = ? WHERE id = ?').run(order.id, p.id)
+  applyStored(order.id, m.userId, m.gift, m.credit ?? 0)
+  if (p.last4 === '0341') openDispute(order.id, p.amount) // the bank disputes this card's charges (test card): an admin resolves it
+  logEvent(hold.event_id, 'order')
   db.prepare("UPDATE holds SET status = 'converted' WHERE id = ?").run(hold.id)
   if (m.save && m.userId) {
     db.prepare('INSERT OR IGNORE INTO saved_cards (user_id, brand, last4, exp, fake_token, fp) VALUES (?,?,?,?,?,?)').run(m.userId, p.brand, p.last4, m.exp, 'tok_' + randomBytes(12).toString('hex'), m.cardFp ?? null)
@@ -213,7 +233,7 @@ export function getOrder(id: number, v: Viewer) {
     .prepare(
       `SELECT o.*, e.title, e.slug, e.starts_at, v.name AS venue, v.tz FROM orders o JOIN events e ON e.id = o.event_id JOIN venues v ON v.id = e.venue_id WHERE o.id = ?`,
     )
-    .get(id) as (Owned & { id: number; email: string; status: string; subtotal: number; fees: number; tax: number; protection: number; discount: number; total: number; review_reason: string | null; refund_error: string | null; event_id: number; created_at: string; title: string; slug: string; starts_at: string; venue: string; tz: string }) | undefined
+    .get(id) as (Owned & { id: number; email: string; status: string; subtotal: number; fees: number; tax: number; protection: number; discount: number; total: number; review_reason: string | null; refund_error: string | null; source: string | null; event_id: number; created_at: string; title: string; slug: string; starts_at: string; venue: string; tz: string }) | undefined
   return o && canViewOrder(o, v) ? o : undefined
 }
 
@@ -243,6 +263,8 @@ export type RefundOpts = {
   fees?: boolean // items only: also return their service fees and tax (default true)
   keepProtection?: boolean // a protection claim returns the tickets but not the premium
   refund?: boolean // false = void: cancel with no money back
+  credit?: boolean // return the card part as account credit instead of to the card (accounts only, not resale orders)
+  via?: string // how the card part comes back; 'chargeback' = the bank took it, cannot fail (set by the dispute resolver)
   release?: boolean // put the seats back on sale (default). Event cancellation leaves them sold: the event is closed
   record?: boolean // a card that refuses the refund is recorded (order 'cancelled' + refund_error, admin retries) instead of rolling back
   quiet?: boolean // the caller sends its own message
@@ -268,7 +290,7 @@ export function killTicket(id: number, release: boolean) {
 // Inside tx(). See RefundOpts.
 function doRefund(orderId: number, opts: RefundOpts): RefundResult {
   const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as
-    | { id: number; user_id: number | null; email: string; status: string; refund_error: string | null; review_reason: string | null; discount: number; access_token: string; event_id: number }
+    | { id: number; user_id: number | null; email: string; status: string; refund_error: string | null; review_reason: string | null; discount: number; access_token: string; event_id: number; source: string | null }
     | undefined
   if (!o) throw new UserError('Order not found')
   if (!['paid', 'review', 'partially_refunded'].includes(o.status) && !(o.status === 'cancelled' && o.refund_error)) throw new UserError(`Order #${orderId} is ${o.status} and cannot be refunded`)
@@ -315,7 +337,9 @@ function doRefund(orderId: number, opts: RefundOpts): RefundResult {
   }
   if (opts.refund === false) amount = 0
 
-  const ok = amount > 0 ? refundMoney(orderId, amount) : true
+  if (opts.credit && (!o.user_id || o.source === 'resale')) throw new UserError('Account credit needs an account and does not apply to resale orders')
+  const ok = amount > 0 ? refundMoney(orderId, amount, opts.credit ? 'credit' : opts.via) : true
+  if (ok) settleStoredRefunds(orderId) // credit / gift card parts go back where they came from
   if (!ok && !opts.record) throw new UserError('The card refused the refund. Nothing was changed.')
   for (const id of kill) killTicket(id, release)
   if (ok) reverseAfterSettlement(orderId) // refunds after settlement come out of the organizer, platform and tax accounts

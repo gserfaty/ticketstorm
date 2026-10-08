@@ -34,6 +34,7 @@ export default function OrderTools({ o, tz, refund, resend, hold, release, move 
             <label key={l.item_id}><input type="checkbox" name="item" value={l.item_id} /> {l.label} ({money(l.value)})</label>
           ))}
           <label><input type="checkbox" name="fees" defaultChecked /> Include fees and tax of ticked items</label>
+          <label><input type="checkbox" name="credit" /> Refund as account credit (buyer has an account)</label>
           <button>Refund</button>
         </form>
       )}

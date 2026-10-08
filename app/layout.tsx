@@ -52,6 +52,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             <button>Show</button>
           </form>
           <Link href="/discover">Discover</Link>
+          <Link href="/gift-cards">Gift cards</Link>
           <Link href="/map">Map</Link>
           {user && <Link href="/inbox" aria-label={`Inbox, ${unread} unread`}>Inbox{unread > 0 && <> <span className="badge on-sale">{unread}</span></>}</Link>}
           <details className="account">

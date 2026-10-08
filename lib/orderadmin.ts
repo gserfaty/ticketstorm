@@ -112,13 +112,13 @@ export function orderLines(orderId: number): Line[] {
 
 // The refund form: full (everything left), items (the ticked ones, with or without fees and tax), or void (cancel, no money back).
 // Strict: if the card refuses, nothing changes and the UserError says so.
-export function refundFromForm(orderId: number, mode: string, items: number[], fees: boolean, reason: string) {
+export function refundFromForm(orderId: number, mode: string, items: number[], fees: boolean, reason: string, credit = false) {
   if (mode === 'void') return refundOrder(orderId, { reason, refund: false })
   if (mode === 'items') {
     if (!items.length) throw new UserError('Tick at least one item')
-    return refundOrder(orderId, { reason, items, fees })
+    return refundOrder(orderId, { reason, items, fees, credit })
   }
-  return refundOrder(orderId, { reason })
+  return refundOrder(orderId, { reason, credit })
 }
 
 // ---- will-call (box-office pickup) ----

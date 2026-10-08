@@ -8,6 +8,7 @@ import { joinQueue } from '../lib/queue.ts'
 import { finalize } from '../lib/orders.ts'
 import { createListing } from '../lib/resale.ts'
 import { makeOffer } from '../lib/offers.ts'
+import { purchaseGift, redeemToCredit } from '../lib/giftcards.ts'
 import { settleEvent } from '../lib/reports.ts'
 import { addMessage, createContact } from '../lib/support.ts'
 import { scanTicket } from '../lib/scan.ts'
@@ -519,6 +520,21 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   const uid = (email: string) => (db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: number }).id
   const l = db.prepare("SELECT id FROM listings WHERE status = 'active' AND seller_id = ?").get(uid('fan2@ticketstorm.test')) as { id: number }
   makeOffer(uid('fan@ticketstorm.test'), l.id, 10000)
+}
+
+// P12B (money): a $25 gift card from fan2@ to fan@ (the code is in /dev/outbox), $20 of account credit for fan2@ (a redeemed gift card), and an order paid with
+// the 0341 test card on the Wednesday show: the bank disputes it, /admin/disputes lists it as open.
+{
+  const uid = (email: string) => (db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: number }).id
+  const card = { number: '4242424242424242', exp: '12/39', cvc: '123' }
+  purchaseGift(uid('fan2@ticketstorm.test'), { amount: 2500, recipient: 'fan@ticketstorm.test', message: 'Enjoy the show!', ...card })
+  purchaseGift(uid('fan@ticketstorm.test'), { amount: 2000, recipient: 'fan2@ticketstorm.test', message: 'For your next ticket', ...card })
+  const code = /code: ([A-Z0-9-]+)/.exec((db.prepare("SELECT body FROM outbox WHERE \"to\" = 'fan2@ticketstorm.test' AND subject LIKE '%gift card' ORDER BY id DESC").get() as { body: string }).body)![1]
+  redeemToCredit(uid('fan2@ticketstorm.test'), code)
+  const wed = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-empire-wednesday'").get() as { id: number }
+  const owner = { sessionToken: 'seed-dispute-session', userId: uid('fan2@ticketstorm.test') }
+  const held = holdBestAvailable(wed.id, owner, 1)
+  finalize({ holdId: held.holdId, sessionToken: owner.sessionToken, userId: owner.userId, email: 'fan2@ticketstorm.test', key: 'seed-dispute-order', method: 'card', brand: 'Visa', last4: '0341', exp: '12/39', save: false, billing: { name: 'Fiona Fan', address: '2 Main St', city: 'New York', zip: '10001' } })
 }
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

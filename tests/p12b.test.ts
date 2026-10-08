@@ -13,6 +13,11 @@ const { finalize } = await import('../lib/orders.ts')
 const { cancelListing, createListing, holdListing, suggestPrice, updateListing } = await import('../lib/resale.ts')
 const offers = await import('../lib/offers.ts')
 const { balance, ledgerTotal } = await import('../lib/ledger.ts')
+const { refundOrder, approve3ds } = await import('../lib/orders.ts')
+const { purchaseGift, findGift, redeemToCredit, newCode } = await import('../lib/giftcards.ts')
+const { creditBalance, spendCredit, addCredit } = await import('../lib/stored.ts')
+const { resolveDispute } = await import('../lib/disputes.ts')
+const { settleEvent } = await import('../lib/reports.ts')
 test.after(() => rmSync(dir, { recursive: true, force: true }))
 
 const run = (sql: string, ...a: (string | number | null)[]) => Number(db.prepare(sql).run(...a).lastInsertRowid)
@@ -121,4 +126,130 @@ test('price suggestion is the median of the other active listings in the section
   assert.equal(s.cents, 8000)
   assert.equal(s.n, 3)
   assert.equal(suggestPrice(tickets[0], sellers[0])!.cents, 9000) // median of 8000 and 10000, others only
+})
+
+const sum = (sql: string, ...a: (string | number)[]) => get<{ s: number | null }>(sql, ...a).s ?? 0
+const payRows = (orderId: number) => db.prepare('SELECT kind, method, amount, status FROM payments WHERE order_id = ? ORDER BY id').all(orderId) as { kind: string; method: string; amount: number; status: string }[]
+function giftWith(buyer: number, cents: number): string {
+  purchaseGift(buyer, { amount: cents, recipient: 'gift@x.test', message: 'hi', number: '4242424242424242', exp: '12/39', cvc: '123' })
+  const mail = get<{ body: string }>("SELECT body FROM outbox WHERE \"to\" = 'gift@x.test' ORDER BY id DESC LIMIT 1")
+  return /Your gift card code: ([A-Z0-9-]+)/.exec(mail.body)![1]
+}
+const itemsSum = (orderId: number) => sum('SELECT sum(unit_cents + fee_cents + tax_cents) AS s FROM order_items WHERE order_id = ?', orderId)
+
+test('gift card: partial payment charges the card the remainder, and a refund returns the gift part to the card', () => {
+  const buyer = user('gbuyer')
+  const code = giftWith(buyer, 2000)
+  assert.match(code, /^[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$/)
+  assert.equal(get<{ code_hash: string }>('SELECT code_hash FROM gift_cards ORDER BY id DESC LIMIT 1').code_hash.includes(code.slice(0, 4)), false) // hashed at rest
+  assert.equal(findGift(code)!.balance, 2000)
+  assert.equal(findGift('AAAA-AAAA-AAAA-AAAA'), undefined)
+  const { orderId } = buy(ev, buyer, 1, { giftCode: code })
+  const rows = payRows(orderId)
+  const total = get<{ total: number }>('SELECT total FROM orders WHERE id = ?', orderId).total
+  assert.deepEqual(rows.map((r) => [r.method, r.amount]), [['card', total - 2000], ['giftcard', 2000]])
+  assert.equal(sum("SELECT sum(amount) AS s FROM payments WHERE order_id = ? AND kind = 'charge'", orderId), total)
+  assert.equal(itemsSum(orderId), total)
+  assert.equal(findGift(code)!.balance, 0)
+  assert.equal(ledgerTotal(), 0)
+  refundOrder(orderId, { reason: 'test' })
+  const refunds = payRows(orderId).filter((r) => r.kind === 'refund')
+  assert.deepEqual(refunds.map((r) => [r.method, r.amount]).sort(), [['card', total - 2000], ['giftcard', 2000]].sort())
+  assert.equal(findGift(code)!.balance, 2000) // the gift part is back on the card
+  assert.equal(ledgerTotal(), 0)
+  // a gift card covering the whole total takes no card at all
+  const big = giftWith(buyer, 50_000)
+  const full = buy(ev, buyer, 1, { giftCode: big, last4: '0002' }) // a declining card is never touched
+  assert.deepEqual(payRows(full.orderId).map((r) => r.method), ['giftcard', 'giftcard']) // the 0-cent main row and the gift card row; the card is never charged
+  assert.equal(payRows(full.orderId).filter((r) => r.amount > 0).every((r) => r.method === 'giftcard'), true)
+  assert.equal(ledgerTotal(), 0)
+})
+
+test('gift card balance can never be overspent: a second 3-D Secure order using the same card is refused when approved', () => {
+  const buyer = user('gbuyer2')
+  const code = giftWith(buyer, 3000)
+  const open3ds = (key: string) => {
+    const session = `g3-${key}`
+    const h = inv.holdBestAvailable(ev, { sessionToken: session, userId: buyer }, 1)
+    const r = finalize({ holdId: h.holdId, sessionToken: session, userId: buyer, email: 'g@x.test', key, ...card, last4: '3220', giftCode: code })
+    assert.ok('threeDs' in r)
+    return { session, paymentId: (r as { threeDs: number }).threeDs }
+  }
+  const a = open3ds('g3-key-aaaaaaaa')
+  const b = open3ds('g3-key-bbbbbbbb')
+  assert.ok('orderId' in approve3ds(a.paymentId, a.session))
+  throwsHold(() => approve3ds(b.paymentId, b.session), /gift card balance changed/)
+  assert.equal(findGift(code)!.balance, 0)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM gift_cards WHERE balance_cents < 0").n, 0)
+  assert.equal(ledgerTotal(), 0)
+})
+
+test('account credit: spending is atomic and never exceeds the balance; refund as credit is applied at checkout', () => {
+  const u = user('creditor')
+  addCredit(u, 1000, 'test')
+  assert.equal(spendCredit(u, 1000, 'a'), true)
+  assert.equal(spendCredit(u, 1, 'b'), false)
+  assert.equal(creditBalance(u), 0)
+  // refund an order as credit
+  const { orderId } = buy(ev, u)
+  const total = get<{ total: number }>('SELECT total FROM orders WHERE id = ?', orderId).total
+  refundOrder(orderId, { reason: 'test', credit: true })
+  assert.equal(creditBalance(u), total)
+  assert.deepEqual(payRows(orderId).filter((r) => r.kind === 'refund').map((r) => r.method), ['credit'])
+  assert.equal(ledgerTotal(), 0)
+  // credit pays first, the card pays the rest; sum(items) == total still
+  const o2 = buy(ev, u, 2, { useCredit: true })
+  const t2 = get<{ total: number }>('SELECT total FROM orders WHERE id = ?', o2.orderId).total
+  assert.equal(creditBalance(u), 0)
+  assert.deepEqual(payRows(o2.orderId).map((r) => [r.method, r.amount]), [['card', t2 - total], ['credit', total]])
+  assert.equal(itemsSum(o2.orderId), t2)
+  assert.equal(ledgerTotal(), 0)
+  // refunding that order returns the credit part to credit and the rest to the card
+  refundOrder(o2.orderId, { reason: 'test' })
+  assert.equal(creditBalance(u), total)
+  assert.equal(ledgerTotal(), 0)
+  // credit never goes past what is owed: a small balance on a big order
+  const o3 = buy(ev, u, 1, { useCredit: true })
+  assert.equal(creditBalance(u), Math.max(total - get<{ total: number }>('SELECT total FROM orders WHERE id = ?', o3.orderId).total, 0))
+  // redeeming a gift card to credit is single use
+  const code = giftWith(u, 1500)
+  const before = creditBalance(u)
+  assert.equal(redeemToCredit(u, code), 1500)
+  assert.throws(() => redeemToCredit(u, code), /no balance/)
+  assert.equal(creditBalance(u), before + 1500)
+  assert.equal(ledgerTotal(), 0)
+})
+
+test('chargeback lost: the order is refunded by a forced payment, tickets die, ledger stays zero-sum (before and after settlement)', () => {
+  const e3 = mkEvent('e3')
+  const u = user('disputer')
+  const a = buy(e3, u, 2, { last4: '0341' })
+  const d = get<{ id: number; status: string; amount: number }>('SELECT id, status, amount FROM disputes WHERE order_id = ?', a.orderId)
+  assert.equal(d.status, 'open')
+  const admin = user('admin1')
+  // a normal refund of this card fails; the chargeback cannot
+  resolveDispute(admin, d.id, 'lost', 'bank won')
+  const ref = payRows(a.orderId).filter((r) => r.kind === 'refund')
+  assert.deepEqual(ref.map((r) => [r.method, r.status]), [['chargeback', 'succeeded']])
+  assert.equal(get<{ status: string }>('SELECT status FROM orders WHERE id = ?', a.orderId).status, 'refunded')
+  assert.equal(sum("SELECT count(*) AS s FROM tickets WHERE order_id = ? AND status = 'cancelled'", a.orderId), 2)
+  assert.equal(sum("SELECT count(*) AS s FROM inventory WHERE id IN (SELECT inventory_id FROM tickets WHERE order_id = ?) AND status = 'available'", a.orderId), 2)
+  throwsHold(() => { try { resolveDispute(admin, d.id, 'won', '') } catch (e) { throw new inv.HoldError(String((e as Error).message), 400) } }, /already decided/)
+  assert.equal(ledgerTotal(), 0)
+  // won: nothing moves
+  const b = buy(e3, u, 1, { last4: '0341' })
+  const db2 = get<{ id: number }>('SELECT id FROM disputes WHERE order_id = ?', b.orderId)
+  resolveDispute(admin, db2.id, 'won', 'evidence ok')
+  assert.equal(get<{ status: string }>('SELECT status FROM orders WHERE id = ?', b.orderId).status, 'paid')
+  // lost AFTER settlement: reversed out of organizer / platform / tax, still zero-sum
+  const c = buy(e3, u, 1, { last4: '0341' })
+  db.prepare('UPDATE orders SET status = status WHERE id = ?').run(c.orderId)
+  db.prepare("UPDATE events SET starts_at = ? WHERE id = ?").run(new Date(Date.now() - 864e5).toISOString(), e3)
+  // the open dispute on b stays paid; settle needs no orders in review
+  settleEvent(e3, admin)
+  assert.equal(ledgerTotal(), 0)
+  const orgBefore = balance(`org:${org}`)
+  resolveDispute(admin, get<{ id: number }>('SELECT id FROM disputes WHERE order_id = ?', c.orderId).id, 'lost', '')
+  assert.ok(balance(`org:${org}`) < orgBefore)
+  assert.equal(ledgerTotal(), 0)
 })

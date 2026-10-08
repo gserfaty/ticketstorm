@@ -8,8 +8,11 @@ import type { Captcha } from '../../lib/defense.ts'
 import { HoldError } from '../../lib/inventory.ts'
 import { UserError } from '../../lib/platform.ts'
 import { setCheckoutOptions, setProtection } from '../../lib/pricing.ts'
-import { approve3ds, fail3ds, finalize } from '../../lib/orders.ts'
+import { approve3ds, fail3ds, finalize, liveHold } from '../../lib/orders.ts'
 import { brandOf, cardFingerprint, validateCard } from '../../lib/payments.ts'
+import { quote } from '../../lib/pricing.ts'
+import { usableGift } from '../../lib/giftcards.ts'
+import { planStored } from '../../lib/stored.ts'
 import type { Method } from '../../lib/payments.ts'
 import { getSession, getUser, refuseImpersonation } from '../../lib/session.ts'
 
@@ -54,7 +57,23 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
   let exp = ''
   let cardFp: string | undefined
   const savedId = field(f, 'saved')
-  if (chosen === 'applepay' || chosen === 'googlepay') {
+  // Gift card and/or account credit first: when they cover the whole total no card is asked for at all.
+  const giftCode = field(f, 'giftcode')
+  const useCredit = f.get('usecredit') === 'on'
+  let covered = false
+  if (giftCode || useCredit) {
+    if (giftCode && !allowed('giftcode', ip, user?.id ?? null, 10)) return bad('Too many gift card attempts, wait a minute')
+    try {
+      if (liveHold(holdId, session.token)) covered = planStored(user?.id ?? null, quote(holdId).total, giftCode ? usableGift(giftCode) : undefined, useCredit).card === 0
+    } catch (e) {
+      if (e instanceof HoldError) return bad(e.message)
+      throw e
+    }
+  }
+  if (covered) {
+    method = giftCode ? 'giftcard' : 'credit'
+    brand = 'Stored value'
+  } else if (chosen === 'applepay' || chosen === 'googlepay') {
     // simulated wallet: no token reaches the server; it is charged as the test Visa 4242
     method = chosen
     ;[brand, last4, exp] = ['Visa', '4242', '12/39']
@@ -82,7 +101,7 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
 
   let r
   try {
-    r = finalize({ holdId, sessionToken: session.token, userId: user?.id ?? null, email, key, method, installments: f.get('installments') === 'on', brand, last4, exp, save: !!user && f.get('save') === 'on' && method === 'card', billing, src: (await cookies()).get('src')?.value, delivery: field(f, 'delivery') || 'mobile', ip, cardFp })
+    r = finalize({ holdId, sessionToken: session.token, userId: user?.id ?? null, email, key, method, installments: f.get('installments') === 'on', giftCode, useCredit, brand, last4, exp, save: !!user && f.get('save') === 'on' && method === 'card', billing, src: (await cookies()).get('src')?.value, delivery: field(f, 'delivery') || 'mobile', ip, cardFp })
   } catch (e) {
     if (e instanceof HoldError) return e.status === 410 ? back(holdId, e.message) : bad(e.message)
     throw e
