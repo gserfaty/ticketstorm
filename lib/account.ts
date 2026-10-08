@@ -7,14 +7,18 @@ const digits = (s: string) => s.replace(/\D/g, '')
 export type Address = { line1: string; city: string; state: string; zip: string }
 export const addressOf = (json: string | null): Address => ({ line1: '', city: '', state: '', zip: '', ...(json ? JSON.parse(json) : {}) })
 
-export function updateProfile(userId: number, f: { name: string; phone: string; address: Address }) {
+export function updateProfile(userId: number, f: { name: string; phone: string; address: Address; password?: string }) {
   if (f.name.length > 80) throw new UserError('Name is limited to 80 characters')
   if (f.phone && (!/^\+?[\d\s().-]+$/.test(f.phone) || digits(f.phone).length < 7 || digits(f.phone).length > 15)) throw new UserError('Enter a valid phone number')
   for (const v of Object.values(f.address)) if (v.length > 100) throw new UserError('Address fields are limited to 100 characters')
+  const cur = db.prepare('SELECT phone, twofa_enabled, password_hash FROM users WHERE id = ?').get(userId) as { phone: string | null; twofa_enabled: number; password_hash: string | null }
+  // with 2FA on the phone receives the codes: it cannot be cleared, and changing it needs the password (a hijacked session must not redirect codes)
+  if (cur.twofa_enabled && f.phone !== (cur.phone ?? '')) {
+    if (!f.phone) throw new UserError('Turn off two-factor login before removing your phone number')
+    if (!cur.password_hash || !verifyPassword(f.password ?? '', cur.password_hash)) throw new UserError('Enter your current password to change the phone number')
+  }
   const any = Object.values(f.address).some(Boolean)
   db.prepare('UPDATE users SET name = ?, phone = ?, address = ? WHERE id = ?').run(f.name, f.phone || null, any ? JSON.stringify(f.address) : null, userId)
-  // no phone, no 2FA: the code would have nowhere to go
-  if (!f.phone) db.prepare('UPDATE users SET twofa_enabled = 0 WHERE id = ?').run(userId)
 }
 
 // Saved cards belong to one user; the id alone is never enough.

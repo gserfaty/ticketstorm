@@ -47,6 +47,19 @@ export async function signup(f: FormData) {
   redirect(nextOf(f))
 }
 
+// Password (or social) step passed for a 2FA account: nobody is logged in yet. Text a code and continue on the OTP page, bound to this browser session.
+async function otpStep(userId: number, f: FormData, ip: string): Promise<never> {
+  if (!allowed('otp-send', ip, userId, 5)) fail('/login', 'Too many codes requested, wait a minute')
+  const session = await ensureSession()
+  try {
+    sendOtp(userId)
+  } catch (e) {
+    if (e instanceof UserError) fail('/login', e.message)
+    throw e
+  }
+  redirect(`/login/otp?p=${encodeURIComponent(pendingToken(session, userId))}&next=${encodeURIComponent(nextOf(f))}`)
+}
+
 export async function loginAction(f: FormData) {
   const email = field(f, 'email').toLowerCase()
   const u = db.prepare('SELECT id, password_hash, status, twofa_enabled FROM users WHERE email = ?').get(email) as
@@ -57,18 +70,7 @@ export async function loginAction(f: FormData) {
   if (isBlocked(ip, email) || !allowed('login', ip, null, 10) || !u?.password_hash || u.status !== 'active' || !verifyPassword(String(f.get('password') ?? ''), u.password_hash)) {
     fail(`/login?next=${encodeURIComponent(nextOf(f))}`, 'Invalid email or password')
   }
-  if (u!.twofa_enabled) {
-    // password was right: nobody is logged in yet. Text a code and continue on the OTP page, bound to this browser session.
-    if (!allowed('otp-send', ip, u!.id, 5)) fail('/login', 'Too many codes requested, wait a minute')
-    const session = await ensureSession()
-    try {
-      sendOtp(u!.id)
-    } catch (e) {
-      if (e instanceof UserError) fail('/login', e.message)
-      throw e
-    }
-    redirect(`/login/otp?p=${encodeURIComponent(pendingToken(session, u!.id))}&next=${encodeURIComponent(nextOf(f))}`)
-  }
+  if (u!.twofa_enabled) return otpStep(u!.id, f, ip)
   await login(u!.id)
   redirect(nextOf(f))
 }
@@ -122,6 +124,7 @@ export async function completeSocial(f: FormData) {
     if (e instanceof UserError) fail('/login', e.message)
     throw e
   }
+  if ((db.prepare('SELECT twofa_enabled t FROM users WHERE id = ?').get(uid) as { t: number }).t) return otpStep(uid, f, clientIp(await headers()))
   await login(uid)
   redirect(nextOf(f))
 }
@@ -151,6 +154,7 @@ export async function setPassword(f: FormData) {
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), row!.user_id)
   db.prepare("UPDATE codes SET used_at = ? WHERE user_id = ? AND kind = 'reset' AND used_at IS NULL").run(now, row!.user_id)
   db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row!.user_id) // log out everywhere
+  db.prepare('DELETE FROM oauth_links WHERE user_id = ?').run(row!.user_id) // linked social logins must be re-linked after a reset
   redirect('/login?notice=' + encodeURIComponent('Password changed. Log in with your new password.'))
 }
 

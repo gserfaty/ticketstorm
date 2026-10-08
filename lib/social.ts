@@ -37,8 +37,8 @@ export function socialUser(provider: string, email: string, name: string, verifi
     let uid = link?.user_id
     if (!uid) {
       const u = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: number } | undefined
-      if (u && !verified) throw new UserError(`${provider} has not verified this email, so it cannot be linked to the existing account`)
-      uid = u?.id ?? Number(db.prepare('INSERT INTO users (email, name, email_verified_at) VALUES (?,?,?)').run(email, name.trim().slice(0, 80), verified ? new Date().toISOString() : null).lastInsertRowid)
+      if (!verified) throw new UserError(`${provider} has not verified this email, so it cannot be used to sign in`)
+      uid = u?.id ?? Number(db.prepare('INSERT INTO users (email, name, email_verified_at) VALUES (?,?,?)').run(email, name.trim().slice(0, 80), verified ? new Date().toISOString() : null).lastInsertRowid) // verified is always true here
       db.prepare('INSERT INTO oauth_links (user_id, provider, subject) VALUES (?,?,?)').run(uid, provider, email)
       if (u && verified) db.prepare('UPDATE users SET email_verified_at = coalesce(email_verified_at, ?) WHERE id = ?').run(new Date().toISOString(), uid)
     }

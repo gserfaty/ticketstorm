@@ -106,13 +106,40 @@ test('a card that refuses the refund rolls a strict refund back; refundEvent rec
   assert.deepEqual(ticketStatuses(orderId), ['valid'])
 })
 
-test('void cancels with no money back and frees the seat', () => {
-  const { orderId } = buy(cheap)
-  const r = refundOrder(orderId, { reason: 't', refund: false })
-  assert.equal(r.amount, 0)
-  assert.equal(order(orderId).status, 'cancelled')
-  assert.equal(pay.refundedOf(orderId), 0)
-  assert.deepEqual(seatStatuses(orderId), ['available'])
+test('void only works when nothing is left to refund; a paid order must be refunded', () => {
+  const paid = buy(cheap)
+  assert.throws(() => refundOrder(paid.orderId, { reason: 't', refund: false }), /use a refund/)
+  assert.equal(order(paid.orderId).status, 'paid')
+  // a comp has nothing paid: void cancels it and frees the seat
+  const comp = compTickets(cheap, 'v@x.test', [{ section: 'S', row: 'A', number: 79 }], '')
+  assert.equal(refundOrder(comp, { reason: 't', refund: false }).amount, 0)
+  assert.equal(order(comp).status, 'cancelled')
+  assert.deepEqual(seatStatuses(comp), ['available'])
+  // item refund with void is also refused on a paid order
+  assert.throws(() => refundOrder(paid.orderId, { reason: 't', refund: false, items: [items(paid.orderId)[0].id] }), /use a refund/)
+})
+
+test('pay in 4: items cannot be refunded while installments are pending; a full cancel voids them and refunds what was collected', () => {
+  const u = user('inst2')
+  const a = buy(cheap, { userId: u, qty: 2, installments: true })
+  assert.throws(() => refundOrder(a.orderId, { reason: 't', items: [items(a.orderId)[0].id] }), /installments are pending/)
+  assert.deepEqual(ticketStatuses(a.orderId), ['valid', 'valid'])
+  const collected = pay.paidOf(a.orderId)
+  refundOrder(a.orderId, { reason: 't' })
+  assert.equal(pay.refundedOf(a.orderId), collected)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM payments WHERE order_id = ? AND status = 'pending'", a.orderId).n, 0)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM payments WHERE order_id = ? AND decline_code = 'voided'", a.orderId).n, 3)
+  assert.equal(chargeDueInstallments(Date.now() + 100 * day), 0)
+  assert.equal(pay.paidOf(a.orderId), collected)
+})
+
+test('refunding exchange credit goes to the card and fails on the 0341 card', () => {
+  const u = user('ex4')
+  const o = buy(cheap, { userId: u, last4: '0341' })
+  const t = get<{ id: number }>('SELECT id FROM tickets WHERE order_id = ?', o.orderId).id
+  const e = completeExchange(t, inv.holdBestAvailable(dear, { sessionToken: 'ex4', userId: u }, 1).holdId, u, 'ex4')
+  assert.throws(() => refundOrder(e.orderId, { reason: 't' }), /refused/)
+  assert.equal(order(e.orderId).status, 'paid')
 })
 
 test('exchange: the price difference is charged going up and refunded going down; old ticket dies, its seat is freed', () => {
@@ -147,7 +174,7 @@ test('exchange: the price difference is charged going up and refunded going down
   assert.equal(pay.paidOf(d.orderId), order(d.orderId).total)
   const downValue = get<{ v: number }>("SELECT unit_cents + fee_cents + tax_cents AS v FROM order_items WHERE order_id = ? AND kind = 'ticket'", down.orderId).v
   assert.equal(pay.refundedOf(down.orderId), downValue) // the ticket is returned in full: credit + cash (the per-order fee stays)
-  assert.equal(get<{ n: number }>('SELECT count(*) AS n FROM exchanges').n, 2)
+  assert.equal(get<{ n: number }>('SELECT count(*) AS n FROM exchanges WHERE from_order IN (?, ?)', up.orderId, down.orderId).n, 2)
 })
 
 test('an exchanged ticket can be exchanged again (the card travels with the credit)', () => {
@@ -294,7 +321,7 @@ test('protection: priced on the ticket subtotal, sum(items) == total; approved c
   assert.equal(pay.refundedOf(orderId), o.total - o.protection)
   assert.equal(order(orderId).status, 'refunded')
   assert.deepEqual(ticketStatuses(orderId), ['cancelled', 'cancelled'])
-  assert.deepEqual(seatStatuses(orderId), ['sold', 'sold']) // seats stay sold, like refundEvent
+  assert.deepEqual(seatStatuses(orderId), ['available', 'available']) // the show is still ahead: seats go back on sale
   assert.throws(() => decideClaim(claim, u, true), /already decided/)
   // no protection, no claim
   const plain = buy(cheap, { userId: u })
@@ -331,6 +358,8 @@ test('social login: links only verified emails, state is bound to the session an
   assert.equal(social.socialUser('apple', 'existing@x.test', 'E', true), existing)
   assert.equal(get<{ n: number }>('SELECT count(*) AS n FROM oauth_links WHERE user_id = ?', existing).n, 1)
   assert.throws(() => social.socialUser('nope', 'a@b.test', '', true), UserError)
+  assert.throws(() => social.socialUser('google', 'fresh@x.test', 'F', false), /not verified/) // no account from an unverified email
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM users WHERE email = 'fresh@x.test'").n, 0)
 
   const s = social.socialState('sess-1', 'google')
   assert.equal(social.checkState(s, 'sess-2', 'google', true), false) // other session
@@ -369,6 +398,19 @@ test('account: export holds only the user\'s own data; delete anonymizes but kee
   assert.equal(get<{ email: string }>('SELECT email FROM orders WHERE id = ?', mine.orderId).email, row.email)
   assert.equal(get<{ owner_id: number }>('SELECT owner_id FROM tickets WHERE id = ?', t.id).owner_id, u)
   assert.equal(order(theirs.orderId).status, 'paid')
+})
+
+test('profile: with 2FA on the phone cannot be cleared and changing it needs the password', () => {
+  const u = user('ph')
+  const addr = { line1: '', city: '', state: '', zip: '' }
+  otp.setTwofa(u, 'password123', true)
+  assert.throws(() => account.updateProfile(u, { name: 'a', phone: '', address: addr }), /Turn off/)
+  assert.throws(() => account.updateProfile(u, { name: 'a', phone: '+15550199', address: addr }), /current password/)
+  assert.throws(() => account.updateProfile(u, { name: 'a', phone: '+15550199', address: addr, password: 'bad' }), /current password/)
+  account.updateProfile(u, { name: 'b', phone: '+15550100', address: addr }) // unchanged phone: fine
+  account.updateProfile(u, { name: 'b', phone: '+15550199', address: addr, password: 'password123' })
+  assert.equal(get<{ phone: string }>('SELECT phone FROM users WHERE id = ?', u).phone, '+15550199')
+  assert.equal(get<{ t: number }>('SELECT twofa_enabled t FROM users WHERE id = ?', u).t, 1)
 })
 
 test('refundEvent still refunds every order through the shared function', () => {

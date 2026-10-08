@@ -21,6 +21,7 @@ export default async function Profile({ searchParams }: { searchParams: Promise<
         <label>Name <input name="name" defaultValue={u.name} maxLength={80} autoComplete="name" /></label>
         <label>Phone (used for texts and two-factor codes) <input name="phone" defaultValue={u.phone ?? ''} autoComplete="tel" /></label>
         <label>Street address <input name="line1" defaultValue={a.line1} autoComplete="street-address" /></label>
+        <label>Current password (only needed to change the phone while two-factor login is on) <input name="password" type="password" autoComplete="current-password" /></label>
         <label>City <input name="city" defaultValue={a.city} autoComplete="address-level2" /></label>
         <label>State <input name="state" defaultValue={a.state} autoComplete="address-level1" /></label>
         <label>ZIP <input name="zip" defaultValue={a.zip} autoComplete="postal-code" /></label>

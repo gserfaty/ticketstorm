@@ -25,7 +25,7 @@ async function run(page: string, fn: (userId: number) => void, ok: string, needs
 }
 
 export async function saveProfile(f: FormData) {
-  await run('profile', (id) => updateProfile(id, { name: field(f, 'name'), phone: field(f, 'phone'), address: { line1: field(f, 'line1'), city: field(f, 'city'), state: field(f, 'state'), zip: field(f, 'zip') } }), 'Profile saved')
+  await run('profile', (id) => updateProfile(id, { name: field(f, 'name'), phone: field(f, 'phone'), password: String(f.get('password') ?? ''), address: { line1: field(f, 'line1'), city: field(f, 'city'), state: field(f, 'state'), zip: field(f, 'zip') } }), 'Profile saved', true)
 }
 
 export async function removeCard(f: FormData) {

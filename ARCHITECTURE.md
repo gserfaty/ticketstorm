@@ -184,15 +184,15 @@ flowchart LR
   B --> F[order status + refund_error]
 ```
 
-- **What is wanted**: everything left (paid minus refunded, optionally minus the protection premium), or the chosen order items (`unit - promo share (+ fee + tax)`; `allocate()` splits the promo over the ticket items exactly as `quote()` did), or nothing (void).
+- **What is wanted**: everything left (paid minus refunded, optionally minus the protection premium), or the chosen order items (`unit - promo share (+ fee + tax)`; `allocate()` splits the promo over the ticket items exactly as `quote()` did), or nothing (void: only when paid minus refunded is zero, e.g. comps; a paid order must be refunded). Item refunds are refused while pay-in-4 installments are pending; a full cancel voids them and refunds what was collected.
 - **Caps**: `refundMoney` and `refund` throw if asked for more than paid minus refunded (per order and per charge); an item with `refunded_cents > 0` cannot be refunded again; an item refund requires a live ticket (`valid` or `listed`). Used, resold and cancelled tickets can only go with a full refund.
-- **Seats**: released (`available`) for partial refunds, voids, fraud cancels, rescheduled-window refunds and admin/organizer cancels; kept `sold` for event cancellation (the event is closed) and protection claims. Add-on units follow the same flag.
+- **Seats**: released (`available`) for partial refunds, voids, fraud cancels, rescheduled-window refunds and admin/organizer cancels, and for protection claims on shows that have not started; kept `sold` for event cancellation (the event is closed) and claims after the show started. Add-on units follow the same flag.
 - **Gateway failure**: `record: true` (event cancel) keeps the order `cancelled` with `refund_error` for the admin retry; everything else is strict: the UserError rolls the whole tx back, tickets included.
 - **Resale**: the seller's credit reversal stays in `refundEvent` (both orders of a resold ticket are refunded only on cancellation); item refunds of a resold ticket are refused because the seller's order no longer has a live ticket.
 
 ### Ticket protection
 
-`settings.protection_pct` (default 8) of the ticket face after the promo, chosen with a checkbox stored in `holds.options.protection`. It is an `order_items` row (`protection`) and `orders.protection`, outside `subtotal`, **untaxed and without fees**, so `sum(items) == total` holds. One claim per order (partial unique index). Approval refunds everything except the premium through `doRefund` and keeps the seats sold, like an event cancellation.
+`settings.protection_pct` (default 8) of the ticket face after the promo, chosen with a checkbox stored in `holds.options.protection`. It is an `order_items` row (`protection`) and `orders.protection`, outside `subtotal`, **untaxed and without fees**, so `sum(items) == total` holds. One claim per order (partial unique index). Approval refunds everything except the premium through `doRefund`; seats are released if the show is still ahead, kept sold otherwise.
 
 ### Exchange
 
@@ -200,7 +200,7 @@ A ticket can move to another date of the same `series_key`. The new seat is held
 
 ### Two-factor login
 
-`users.twofa_enabled` is switched in `/account/security` with the password. After the password step `loginAction` calls `sendOtp` (code row in `codes`, SMS in the outbox) and redirects to `/login/otp?p=<token>`; the token is an HMAC over (session, user, expiry) (`mac` from `lib/defense.ts`), so it only works in the browser session that passed the password check. `verifyOtp` takes the newest unused, unexpired code, counts wrong guesses in `codes.attempts` (5 kills the code), and consumes it with a conditional UPDATE. `devOtp()` is true only when `NODE_ENV=development` **and** `DEV_OTP=1`; then every code is `000000`. Social login and password reset do not use the OTP step.
+`users.twofa_enabled` is switched in `/account/security` with the password. After the password step `loginAction` calls `sendOtp` (code row in `codes`, SMS in the outbox) and redirects to `/login/otp?p=<token>`; the token is an HMAC over (session, user, expiry) (`mac` from `lib/defense.ts`), so it only works in the browser session that passed the password check. `verifyOtp` takes the newest unused, unexpired code, counts wrong guesses in `codes.attempts` (5 kills the code), and consumes it with a conditional UPDATE. `devOtp()` is true only when `NODE_ENV=development` **and** `DEV_OTP=1`; then every code is `000000`. Social login also goes through the OTP step for 2FA accounts. While 2FA is on the phone cannot be cleared and changing it needs the password. Social logins are only created or linked for provider-verified emails and are unlinked on password reset.
 
 ### Idempotency
 

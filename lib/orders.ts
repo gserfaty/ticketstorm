@@ -262,6 +262,10 @@ function doRefund(orderId: number, opts: RefundOpts): RefundResult {
   const release = opts.release !== false
   const remaining = paidOf(orderId) - refundedOf(orderId)
   const live = "status IN ('valid','listed','used')"
+  // void = cancel with no money back: only for orders with nothing left to refund (comps, unpaid); otherwise it would keep the buyer's money
+  if (opts.refund === false && remaining > 0) throw new UserError('This order has money paid on it: use a refund, not void')
+  // an item refund on a pay-in-4 order would leave installments that still charge the full price
+  if (opts.items && db.prepare("SELECT 1 FROM payments WHERE order_id = ? AND status = 'pending'").get(orderId)) throw new UserError('Finish or cancel the pay-in-4 plan first: items cannot be refunded while installments are pending')
 
   let amount = 0
   const kill: number[] = []
@@ -287,7 +291,6 @@ function doRefund(orderId: number, opts: RefundOpts): RefundResult {
       db.prepare('UPDATE order_items SET refunded_cents = ? WHERE id = ?').run(Math.max(value, 1), it.id)
       amount += value
     }
-    // ponytail: on a pay-in-4 order an item refund is capped at what was paid so far; the unpaid installments are not re-split.
     amount = Math.min(amount, remaining)
   } else {
     const prot = opts.keepProtection ? (db.prepare("SELECT coalesce(sum(unit_cents), 0) AS s FROM order_items WHERE order_id = ? AND kind = 'protection'").get(orderId) as { s: number }).s : 0

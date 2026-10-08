@@ -25,8 +25,7 @@ export function submitClaim(orderId: number, reason: string, details: string) {
 }
 
 // Approve = refund the order through the shared refund function WITHOUT the protection premium, cancel its tickets, one tx with the status change.
-// The seats stay sold, as with an event cancellation (refundEvent): a claim is usually made close to or after the show, so there is nothing
-// to resell, and the cancelled ticket cannot be scanned.
+// Seats go back on sale if the show is still ahead; after the show starts they stay sold (nothing to resell). The cancelled ticket cannot be scanned.
 // If the card refuses the refund the whole thing rolls back and the claim stays 'submitted'.
 export function decideClaim(claimId: number, adminId: number, approve: boolean) {
   tx(() => {
@@ -35,7 +34,8 @@ export function decideClaim(claimId: number, adminId: number, approve: boolean) 
     const o = db.prepare('SELECT user_id, email, access_token FROM orders WHERE id = ?').get(c.order_id) as { user_id: number | null; email: string; access_token: string }
     let text = `Your protection claim for order #${c.order_id} was denied.`
     if (approve) {
-      const r = refundInTx(c.order_id, { reason: 'claim', keepProtection: true, release: false, quiet: true })
+      const ev = db.prepare('SELECT e.starts_at FROM orders o JOIN events e ON e.id = o.event_id WHERE o.id = ?').get(c.order_id) as { starts_at: string }
+      const r = refundInTx(c.order_id, { reason: 'claim', keepProtection: true, release: Date.parse(ev.starts_at) > Date.now(), quiet: true })
       text = `Your protection claim for order #${c.order_id} was approved. We refunded ${money(r.amount)}.`
     }
     sendEmail(o.email, `Claim on order #${c.order_id}`, `${text}\n${APP_URL}/orders/${c.order_id}${o.user_id ? '' : `?t=${o.access_token}`}`)

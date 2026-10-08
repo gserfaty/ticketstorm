@@ -2,6 +2,21 @@
 
 All notable changes, newest first. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no version numbers yet; each section is a commit. Review-fix commits are grouped under their phase.
 
+## P9 review fixes
+
+#### Fixed
+- **Void kept the buyer's money** (`doRefund`): `refund: false` worked on any paid order (also for box office), cancelling tickets and keeping the payment. Void is now refused ("use a refund") while paid minus refunded is above zero, so it only applies to comps and unpaid orders. This also closes the item-refund-with-void case that marked a whole order cancelled.
+- **Item refund on a pay-in-4 order over-collected**: the refund was capped at what was collected while later installments still charged the full price. Item refunds are refused while installments are pending. Full cancels (event cancel, fraud cancel, claim, refund window) void every pending row and refund only what was collected; tested.
+- **Social login skipped 2FA**: `completeSocial` now sends the OTP and continues on `/login/otp` like the password login (shared `otpStep`).
+- **Phone could be changed or cleared without the password while 2FA was on**: clearing is refused until 2FA is off; changing needs the current password (profile form has a password field).
+- **Refunding exchange credit never touched the card**: refund rows for an `exchange` charge are now recorded as `card` (so the 0341 failure applies); only the internal credit move keeps method `exchange`.
+- **Unverified provider emails**: no account is created from an email the provider has not verified (was: created unverified). `oauth_links` are deleted on password reset.
+- **Approved claims kept seats sold for future shows**: seats are released when the show is still ahead, kept sold once it has started.
+- **UI**: Exchange link also for `partially_refunded` orders (matches `exchangeable`); `/tickets` shows "on hold (order under review)" instead of "valid".
+- Tests: void rules, pay-in-4 item refund and cancel, exchange-credit refund on 0341, unverified social, phone/2FA rules, claim seat release.
+
+---
+
 ## P9: Checkout extras, account, protection, refunds and exchanges
 
 Commits d8216bf (feature) and 30b8536 (repeat-exchange fix, extra test, notes). 85 tests (`tests/p9.test.ts` is new); `typecheck`, `test` and `build` green; the acceptance checks below were also run against a live dev server with scripted form posts (cookie jar, no JS) and one real browser pass for the Apple Pay modal.

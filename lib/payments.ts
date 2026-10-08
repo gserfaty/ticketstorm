@@ -70,7 +70,7 @@ export function refund(paymentId: number, amount?: number, via?: string) {
   const left = orig.amount - refundedFrom(paymentId)
   const amt = amount ?? left
   if (!Number.isInteger(amt) || amt < 1 || amt > left) throw new Error('Refund exceeds what was paid')
-  const method = via ?? orig.method
+  const method = via ?? (orig.method === 'exchange' ? 'card' : orig.method) // returning exchange credit goes back to the card it came from
   const failed = orig.last4 === '0341' && method !== 'exchange'
   db.prepare(
     `INSERT INTO payments (order_id, kind, method, amount, status, brand, last4, decline_code, parent_id, idempotency_key) VALUES (?, 'refund', ?, ?, ?, ?, ?, ?, ?, ?)`,
