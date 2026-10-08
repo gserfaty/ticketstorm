@@ -16,6 +16,9 @@ const { setResaleRule, setTransferRule } = await import('../lib/rules.ts')
 const { balance, ledgerTotal } = await import('../lib/ledger.ts')
 const { requestPayout, decidePayout } = await import('../lib/payouts.ts')
 const { csvCell, reportCsv, settleEvent, eventReport } = await import('../lib/reports.ts')
+const imp = await import('../lib/impersonation.ts')
+const sup = await import('../lib/support.ts')
+const { readFileSync } = await import('node:fs')
 const { sendCampaign } = await import('../lib/campaign.ts')
 test.after(() => rmSync(dir, { recursive: true, force: true }))
 
@@ -223,4 +226,61 @@ test('campaign goes only to opted-in fans, with an unsubscribe footer, and is ra
   sendCampaign(e6, 'Three', 'x')
   assert.throws(() => sendCampaign(e6, 'Four', 'x'), /per event per day/)
   assert.throws(() => sendCampaign(e6, '', 'x'), /Subject/)
+})
+
+test('impersonation: admin only, audited start and stop, restrictions apply to the session', () => {
+  db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(admin)
+  const admin2 = user('admin2')
+  db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(admin2)
+  assert.throws(() => imp.startSession(alice, bob), /Only admins/) // a fan cannot
+  assert.throws(() => imp.startSession(admin, admin2), /Admins cannot/)
+  assert.throws(() => imp.startSession(admin, admin), /Admins cannot/)
+  const token = imp.startSession(admin, bob)
+  const row = get<{ user_id: number; impersonator_id: number; expires_at: string }>('SELECT user_id, impersonator_id, expires_at FROM sessions WHERE token = ?', token)
+  assert.equal(row.user_id, bob)
+  assert.equal(row.impersonator_id, admin)
+  assert.ok(Date.parse(row.expires_at) - Date.now() <= imp.IMPERSONATION_MS)
+  assert.equal(imp.isImpersonating(token), true)
+  assert.throws(() => imp.assertNotImpersonating(token), /Not available/) // what requireSelf enforces
+  imp.assertNotImpersonating('some-normal-session') // no throw
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM audit_log WHERE action = 'impersonate.start' AND actor_id = ?", admin).n, 1)
+  assert.equal(imp.endSession(token), admin)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM audit_log WHERE action = 'impersonate.stop' AND actor_id = ?", admin).n, 1)
+  assert.equal(imp.isImpersonating(token), false)
+  assert.equal(imp.endSession(token), undefined) // already over: no second audit row
+  // the guards that matter use requireSelf (which refuses an impersonating session), never plain requireUser
+  const read = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
+  const acct = read('app/account/actions.ts')
+  assert.ok(!acct.includes('requireUser'), 'account actions (password, 2FA, cards, payouts) must use requireSelf')
+  const sess = read('lib/session.ts')
+  assert.match(sess, /requireAdmin[\s\S]*?requireSelf\(\)/)
+  assert.match(sess, /requireOrgRole[\s\S]*?requireSelf\(\)/)
+})
+
+test('every exported admin and organizer action writes the audit log', () => {
+  for (const f of ['app/admin/actions.ts', 'app/organizer/actions.ts']) {
+    const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
+    const bodies = src.split(/^export async function /m).slice(1)
+    for (const b of bodies) {
+      const name = b.slice(0, b.indexOf('('))
+      if (name === 'impersonateUser') continue // audited inside lib/impersonation.ts (tested above)
+      assert.ok(b.includes('audit('), `${f}: ${name} has no audit() call`)
+    }
+  }
+})
+
+test('support: staff reply is appended, emailed, visible to the owner only; follow-ups reopen', () => {
+  const id = sup.createContact(alice, 'alice@x.test', 'Lost ticket', 'Where is my ticket?')
+  sup.addMessage(id, { staff: true, name: 'Ada' }, 'Check My tickets.')
+  const t = sup.getSupportTicket(id)!
+  assert.equal(t.status, 'answered')
+  assert.equal(t.messages.length, 2)
+  assert.equal(t.messages[1].staff, true)
+  assert.match(get<{ body: string }>("SELECT body FROM outbox WHERE subject LIKE ? ORDER BY id DESC", `Re: Lost ticket%`).body, /Check My tickets/)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM notifications WHERE user_id = ? AND kind = 'support'", alice).n, 1)
+  assert.throws(() => sup.addMessage(id, { staff: false, userId: bob }, 'hi'), /not found/)
+  sup.addMessage(id, { staff: false, userId: alice }, 'Thanks')
+  assert.equal(sup.getSupportTicket(id)!.status, 'open')
+  sup.closeTicket(id)
+  assert.throws(() => sup.addMessage(id, { staff: false, userId: alice }, 'again'), /closed/)
 })

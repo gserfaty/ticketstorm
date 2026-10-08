@@ -5,9 +5,10 @@ import './globals.css'
 import { listCities } from '../lib/geo.ts'
 import { runJobsThrottled } from '../lib/jobs.ts'
 import { db } from '../lib/db.ts'
-import { allInOn, getUser } from '../lib/session.ts'
+import { allInOn, getSession, getUser } from '../lib/session.ts'
 import SearchBox from '../components/SearchBox.tsx'
 import { setCity, toggleAllIn } from './actions.ts'
+import { stopViewingAs } from './impersonate/actions.ts'
 
 export const metadata = { title: 'TicketStorm', description: 'Live events, tickets in a flash' }
 
@@ -18,9 +19,16 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const city = (await cookies()).get('city')?.value ?? ''
   const allIn = await allInOn()
   const unread = user ? (db.prepare('SELECT count(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL').get(user.id) as { n: number }).n : 0
+  const imp = user && (await getSession())?.impersonator_id ? (db.prepare('SELECT email FROM users WHERE id = ?').get((await getSession())!.impersonator_id!) as { email: string }) : undefined
   return (
     <html lang="en">
       <body>
+        {imp && (
+          <div className="imp-banner" role="alert">
+            <span>Support mode: you are viewing TicketStorm as <strong>{user!.email}</strong> (admin {imp.email}). Security, payment, payout, organizer and admin actions are disabled. This session is audited.</span>
+            <form action={stopViewingAs}><button>Stop viewing as this user</button></form>
+          </div>
+        )}
         <header className="top">
           <Link href="/" className="brand">TicketStorm</Link>
           <form action="/search" className="search">

@@ -10,7 +10,8 @@ import { audit, setFlag, UserError } from '../../lib/platform.ts'
 import { setCityTax, setFeeDefaults } from '../../lib/pricing.ts'
 import { setResaleDefaults } from '../../lib/rules.ts'
 import { decidePayout } from '../../lib/payouts.ts'
-import { requireAdmin } from '../../lib/session.ts'
+import { addMessage, closeTicket } from '../../lib/support.ts'
+import { requireAdmin, startImpersonation } from '../../lib/session.ts'
 
 const text = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 const num = (f: FormData, k: string) => Number(f.get(k))
@@ -210,4 +211,64 @@ export async function payoutDecision(f: FormData) {
     decidePayout(id, admin.id, paid)
     audit(admin.id, paid ? 'payout.paid' : 'payout.reject', `payout:${id}`)
   }, paid ? 'Marked paid' : 'Rejected: the funds are back in the balance')
+}
+
+// ---- fraud and bots ----
+export async function blocklistAdd(f: FormData) {
+  const admin = await requireAdmin()
+  const kind = text(f, 'kind') === 'email' ? 'email' : 'ip'
+  const value = text(f, 'value').toLowerCase()
+  run('/admin/fraud', () => {
+    if (!value || value.length > 200 || (kind === 'email' && !/^\S+@\S+$/.test(value))) throw new UserError('Enter an IP address or an email')
+    if (db.prepare('INSERT OR IGNORE INTO blocklist (kind, value) VALUES (?,?)').run(kind, value).changes !== 1) throw new UserError('Already on the blocklist')
+    audit(admin.id, 'blocklist.add', `${kind}:${value}`)
+  }, 'Added to the blocklist')
+}
+
+export async function blocklistRemove(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'id')
+  run('/admin/fraud', () => {
+    const b = db.prepare('DELETE FROM blocklist WHERE id = ? RETURNING kind, value').get(id) as { kind: string; value: string } | undefined
+    if (!b) throw new UserError('Entry not found')
+    audit(admin.id, 'blocklist.remove', `${b.kind}:${b.value}`)
+  }, 'Removed')
+}
+
+export async function setUserFlag(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'userId')
+  const flagged = f.get('flagged') === '1' ? 1 : 0
+  db.prepare('UPDATE users SET flagged = ? WHERE id = ?').run(flagged, id)
+  audit(admin.id, flagged ? 'user.flag' : 'user.unflag', `user:${id}`)
+  done(text(f, 'back') === 'fraud' ? '/admin/fraud' : '/admin/users', 'Updated')
+}
+
+// ---- support ----
+export async function supportReply(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'ticketId')
+  run(`/admin/support/${id}`, () => {
+    addMessage(id, { staff: true, name: admin.name || 'Support' }, String(f.get('message') ?? ''))
+    audit(admin.id, 'support.reply', `support:${id}`)
+  }, 'Reply sent')
+}
+
+export async function supportClose(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'ticketId')
+  run(`/admin/support/${id}`, () => { closeTicket(id); audit(admin.id, 'support.close', `support:${id}`) }, 'Closed')
+}
+
+// ---- impersonation ----
+// Start/stop are audited inside lib/impersonation.ts. The action swaps this admin's session for a 1-hour session of the target.
+export async function impersonateUser(f: FormData) {
+  const admin = await requireAdmin()
+  try {
+    await startImpersonation(admin.id, num(f, 'userId'))
+  } catch (e) {
+    if (e instanceof UserError) refuse('/admin/users', e.message)
+    throw e
+  }
+  redirect('/')
 }
