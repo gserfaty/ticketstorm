@@ -4,6 +4,7 @@ import { hashPassword } from '../lib/auth.ts'
 import { generateVenue, venueCapacity } from '../lib/venue-gen.ts'
 import { generateInventory, holdBestAvailable } from '../lib/inventory.ts'
 import { finalize } from '../lib/orders.ts'
+import { createListing } from '../lib/resale.ts'
 import { localToUtc, slugify } from '../lib/format.ts'
 import type { VenueKind } from '../lib/venue-gen.ts'
 
@@ -252,6 +253,20 @@ tx(() => {
     holdId: held.holdId, sessionToken: owner.sessionToken, userId: fan.id, email: fan.email, key: 'seed-fan-order-1', method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: true,
     billing: { name: 'Frankie Fan', address: '1 Main St', city: 'New York', zip: '10001' },
   })
+}
+
+// fan2@ buys one seat for the same show and lists it, so the map shows a Verified Resale seat after reset.
+{
+  const fan2 = db.prepare("SELECT id, email FROM users WHERE email = 'fan2@ticketstorm.test'").get() as { id: number; email: string }
+  const ev = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-empire-saturday'").get() as { id: number }
+  const owner = { sessionToken: 'seed-fan2-session', userId: fan2.id }
+  const held = holdBestAvailable(ev.id, owner, 1)
+  finalize({
+    holdId: held.holdId, sessionToken: owner.sessionToken, userId: fan2.id, email: fan2.email, key: 'seed-fan2-order-1', method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false,
+    billing: { name: 'Fiona Fan', address: '2 Main St', city: 'New York', zip: '10001' },
+  })
+  const t = db.prepare('SELECT id FROM tickets WHERE owner_id = ?').get(fan2.id) as { id: number }
+  createListing(fan2.id, t.id, 12500)
 }
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

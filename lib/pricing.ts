@@ -3,7 +3,7 @@ import { db } from './db.ts'
 export type FeeRule = { service_pct: number; facility_cents: number; order_cents: number }
 const DEFAULT_FEES: FeeRule = { service_pct: 10, facility_cents: 300, order_cents: 250 }
 
-export type Line = { inventoryId: number; eventId: number; label: string; unit: number; fee: number; tax: number }
+export type Line = { inventoryId: number; eventId: number; label: string; unit: number; fee: number; tax: number; listingId?: number }
 export type Quote = { lines: Line[]; subtotal: number; fees: number; orderFee: number; tax: number; total: number }
 
 // Pure money math. Per ticket: face + service % + facility charge, then city tax on (face + those fees);
@@ -28,13 +28,24 @@ export function quote(holdId: number): Quote {
   const { bps } = db
     .prepare('SELECT c.tax_rate_bps AS bps FROM events e JOIN venues v ON v.id = e.venue_id JOIN cities c ON c.id = v.city_id WHERE e.id = ?')
     .get(hold.event_id) as { bps: number }
+  type R = { id: number; event_id: number; price_cents: number; level: string; section: string; row: string | null; number: number | null; listing_id?: number }
   const rows = db
     .prepare(
       `SELECT i.id, i.event_id, pl.price_cents, pl.name AS level, s.name AS section, st.row, st.number
        FROM inventory i JOIN price_levels pl ON pl.id = i.price_level_id JOIN sections s ON s.id = i.section_id LEFT JOIN seats st ON st.id = i.seat_id
        WHERE i.hold_id = ? ORDER BY i.id`,
     )
-    .all(holdId) as { id: number; event_id: number; price_cents: number; level: string; section: string; row: string | null; number: number | null }[]
+    .all(holdId) as R[]
+  // a resale hold reserves one listing instead of inventory rows; the buyer pays the seller's asking price
+  rows.push(
+    ...(db
+      .prepare(
+        `SELECT i.id, i.event_id, l.price_cents, 'Verified Resale' AS level, s.name AS section, st.row, st.number, l.id AS listing_id
+         FROM listings l JOIN tickets t ON t.id = l.ticket_id JOIN inventory i ON i.id = t.inventory_id JOIN sections s ON s.id = i.section_id
+         LEFT JOIN seats st ON st.id = i.seat_id WHERE l.hold_id = ? AND l.status = 'active'`,
+      )
+      .all(holdId) as R[]),
+  )
   const units = rows.map((r) => (r.event_id === hold.event_id ? r.price_cents : 0))
   const p = price(units, rule, bps)
   const lines = rows.map((r, i) => ({
@@ -44,6 +55,7 @@ export function quote(holdId: number): Quote {
     unit: units[i],
     fee: p.lineFees[i],
     tax: p.lineTax[i],
+    ...(r.listing_id ? { listingId: r.listing_id } : {}),
   }))
   return { lines, subtotal: p.subtotal, fees: p.fees, orderFee: p.orderFee, tax: p.tax, total: p.total }
 }

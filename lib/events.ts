@@ -125,6 +125,11 @@ export function eventsNear(cityId: number, miles: number, limit: number): EventR
     .slice(0, limit)
 }
 
+export function eventsByIds(ids: number[]): EventRow[] {
+  if (!ids.length) return []
+  return db.prepare(`${SELECT} WHERE ${VISIBLE} AND e.id IN (${ids.map(() => '?').join(',')}) ORDER BY e.starts_at`).all(...ids) as EventRow[]
+}
+
 export function genresIn(category: string): string[] {
   return (db.prepare('SELECT DISTINCT genre FROM events WHERE category = ? AND genre IS NOT NULL ORDER BY genre').all(category) as { genre: string }[]).map((r) => r.genre)
 }
@@ -136,12 +141,12 @@ export function getEvent(slug: string) {
     .get(slug) as
     | { id: number; slug: string; title: string; category: string; genre: string | null; starts_at: string; doors_at: string | null; image: string | null
         description: string | null; status: string; onsale_at: string | null; ticket_limit: number; venue: string; venue_slug: string; tz: string
-        address: string; city: string; state: string }
+        address: string; city: string; state: string; venue_id: number }
     | undefined
   if (!e) return undefined
   const lineup = db
-    .prepare('SELECT a.name, a.slug FROM event_artists ea JOIN artists a ON a.id = ea.artist_id WHERE ea.event_id = ? ORDER BY ea.billing')
-    .all(e.id) as { name: string; slug: string }[]
+    .prepare('SELECT a.id, a.name, a.slug FROM event_artists ea JOIN artists a ON a.id = ea.artist_id WHERE ea.event_id = ? ORDER BY ea.billing')
+    .all(e.id) as { id: number; name: string; slug: string }[]
   const levels = db
     .prepare('SELECT id, name, color, price_cents, ticket_type FROM price_levels WHERE event_id = ? ORDER BY price_cents')
     .all(e.id) as { id: number; name: string; color: string | null; price_cents: number; ticket_type: string }[]

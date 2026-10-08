@@ -357,3 +357,51 @@ CREATE TABLE IF NOT EXISTS audit_log (
   target TEXT NOT NULL,
   data TEXT
 );
+
+-- Fan-to-fan (P6)
+CREATE TABLE IF NOT EXISTS transfers (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+  from_user INTEGER NOT NULL REFERENCES users(id),
+  to_email TEXT,
+  to_phone TEXT,
+  to_user INTEGER REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined','cancelled','expired')),
+  expires_at TEXT NOT NULL,
+  claim_token TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_pending_transfer ON transfers(ticket_id) WHERE status = 'pending';
+
+-- hold_id/held_until reserve a listing for one buyer's checkout; expiry is lazy (held_until < now = free again)
+CREATE TABLE IF NOT EXISTS listings (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+  seller_id INTEGER NOT NULL REFERENCES users(id),
+  price_cents INTEGER NOT NULL CHECK (price_cents > 0),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','sold','cancelled','expired')),
+  expires_at TEXT NOT NULL,
+  hold_id INTEGER REFERENCES holds(id),
+  held_until TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_listing ON listings(ticket_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS listings_hold ON listings(hold_id);
+
+CREATE TABLE IF NOT EXISTS ledger (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  account TEXT NOT NULL, -- 'user:ID' | 'org:ID' | 'platform'
+  kind TEXT NOT NULL CHECK (kind IN ('sale','fee','resale_credit','refund','payout')),
+  amount INTEGER NOT NULL,
+  ref TEXT
+);
+CREATE INDEX IF NOT EXISTS ledger_account ON ledger(account);
+
+CREATE TABLE IF NOT EXISTS favorites (
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL CHECK (kind IN ('artist','venue','event')),
+  ref_id INTEGER NOT NULL,
+  PRIMARY KEY (user_id, kind, ref_id)
+);

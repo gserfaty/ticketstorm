@@ -1,0 +1,52 @@
+'use server'
+
+import { redirect } from 'next/navigation'
+import { db } from '../../lib/db.ts'
+import { HoldError } from '../../lib/inventory.ts'
+import { cancelListing, createListing, holdListing } from '../../lib/resale.ts'
+import { ensureSession, requireUser } from '../../lib/session.ts'
+
+const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
+const id = (f: FormData, k: string) => (/^\d+$/.test(field(f, k)) ? Number(field(f, k)) : 0)
+const go = (path: string, key: 'error' | 'notice', msg: string): never => redirect(`${path}${path.includes('?') ? '&' : '?'}${key}=${encodeURIComponent(msg)}`)
+
+// "12.50" -> 1250. Whole dollars or up to 2 decimals, 6 digits max.
+const toCents = (s: string) => (/^\d{1,6}(\.\d{1,2})?$/.test(s) ? Math.round(Number(s) * 100) : 0)
+
+export async function sellTicket(f: FormData) {
+  const user = await requireUser()
+  const back = '/sell'
+  try {
+    createListing(user.id, id(f, 'ticketId'), toCents(field(f, 'price')))
+  } catch (e) {
+    if (e instanceof HoldError) go(back, 'error', e.message)
+    throw e
+  }
+  redirect('/listings?notice=' + encodeURIComponent('Listed for resale.'))
+}
+
+export async function cancelListingAction(f: FormData) {
+  const user = await requireUser()
+  try {
+    cancelListing(user.id, id(f, 'listingId'))
+  } catch (e) {
+    if (e instanceof HoldError) go('/listings', 'error', e.message)
+    throw e
+  }
+  redirect('/listings?notice=' + encodeURIComponent('Listing cancelled.'))
+}
+
+// Guests may buy; the hold belongs to the session like any other. Lands on the normal checkout.
+export async function buyListing(f: FormData) {
+  const token = await ensureSession()
+  const userId = (db.prepare('SELECT user_id FROM sessions WHERE token = ?').get(token) as { user_id: number | null }).user_id
+  const back = field(f, 'back').startsWith('/') && !field(f, 'back').startsWith('//') ? field(f, 'back') : '/'
+  let holdId = 0
+  try {
+    holdId = holdListing(id(f, 'listingId'), { sessionToken: token, userId }).holdId
+  } catch (e) {
+    if (e instanceof HoldError) go(back, 'error', e.message)
+    throw e
+  }
+  redirect(`/checkout/${holdId}`)
+}

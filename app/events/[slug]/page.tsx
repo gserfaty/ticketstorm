@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { eventState, getEvent } from '../../../lib/events.ts'
 import { isSoldOut } from '../../../lib/inventory.ts'
+import Heart from '../../../components/Heart.tsx'
 import { fmtDateTime, fmtDateTimeTz, money } from '../../../lib/format.ts'
 
 export default async function EventPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -13,12 +14,12 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
   const notOnSale = e!.status === 'published' || e!.status === 'rescheduled' ? e!.onsale_at && Date.parse(e!.onsale_at) > Date.now() : false
   return (
     <>
-      <h1>{e!.title} <span className={`badge ${s.label.toLowerCase().replace(' ', '-')}`}>{s.label}</span></h1>
+      <h1>{e!.title} <span className={`badge ${s.label.toLowerCase().replace(' ', '-')}`}>{s.label}</span> <Heart kind="event" id={e!.id} label={e!.title} /></h1>
       {e!.image && <img src={e!.image} alt="" className="hero-img" />}
       <p>{fmtDateTimeTz(e!.starts_at, e!.tz)}</p>
       {e!.doors_at && <p className="muted">Doors {fmtDateTime(e!.doors_at, e!.tz)}</p>}
-      <p><Link href={`/venues/${e!.venue_slug}`}>{e!.venue}</Link> · {e!.address}, {e!.city}, {e!.state}</p>
-      <p className="muted">Lineup: {e!.lineup.map((a) => a.name).join(', ')}</p>
+      <p><Link href={`/venues/${e!.venue_slug}`}>{e!.venue}</Link> <Heart kind="venue" id={e!.venue_id} label={e!.venue} /> · {e!.address}, {e!.city}, {e!.state}</p>
+      <div className="muted row">Lineup: {e!.lineup.map((a) => <span key={a.id}>{a.name} <Heart kind="artist" id={a.id} label={a.name} /></span>)}</div>
       {e!.description && <p>{e!.description}</p>}
       {levels.length > 0 && (
         <>

@@ -10,6 +10,11 @@ import { login } from '../lib/session.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 const fail = (path: string, msg: string): never => redirect(`${path}${path.includes('?') ? '&' : '?'}error=${encodeURIComponent(msg)}`)
+// Where to go after login/signup: a same-site path only (no open redirect).
+const nextOf = (f: FormData) => {
+  const n = field(f, 'next')
+  return /^\/(?![/\\])/.test(n) ? n : '/'
+}
 const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString()
 
 function newCode(userId: number, kind: 'verify' | 'reset', hours: number): string {
@@ -24,9 +29,10 @@ export async function signup(f: FormData) {
   const email = field(f, 'email').toLowerCase()
   const name = field(f, 'name')
   const password = String(f.get('password') ?? '')
-  if (!/^\S+@\S+\.\S+$/.test(email)) fail('/signup', 'Enter a valid email')
-  if (password.length < 8) fail('/signup', 'Password must be at least 8 characters')
-  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) fail('/signup', 'Email already registered')
+  const retry = `/signup?next=${encodeURIComponent(nextOf(f))}`
+  if (!/^\S+@\S+\.\S+$/.test(email)) fail(retry, 'Enter a valid email')
+  if (password.length < 8) fail(retry, 'Password must be at least 8 characters')
+  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) fail(retry, 'Email already registered')
   const { lastInsertRowid } = db
     .prepare('INSERT INTO users (email, name, password_hash) VALUES (?,?,?)')
     .run(email, name, hashPassword(password))
@@ -34,7 +40,7 @@ export async function signup(f: FormData) {
   const code = newCode(id, 'verify', 72)
   sendEmail(email, 'Verify your TicketStorm email', `Welcome to TicketStorm! Verify your email: ${APP_URL}/verify?code=${code}`)
   await login(id)
-  redirect('/')
+  redirect(nextOf(f))
 }
 
 export async function loginAction(f: FormData) {
@@ -44,10 +50,10 @@ export async function loginAction(f: FormData) {
     | undefined
   // same message for unknown email / wrong password / blocked
   if (!u?.password_hash || u.status !== 'active' || !verifyPassword(String(f.get('password') ?? ''), u.password_hash)) {
-    fail('/login', 'Invalid email or password')
+    fail(`/login?next=${encodeURIComponent(nextOf(f))}`, 'Invalid email or password')
   }
   await login(u!.id)
-  redirect('/')
+  redirect(nextOf(f))
 }
 
 export async function requestReset(f: FormData) {

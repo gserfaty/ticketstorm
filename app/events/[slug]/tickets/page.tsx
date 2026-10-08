@@ -2,19 +2,44 @@ import { notFound, redirect } from 'next/navigation'
 import { db } from '../../../../lib/db.ts'
 import { eventState, getEvent } from '../../../../lib/events.ts'
 import { activeHold, getAvailability, isSoldOut } from '../../../../lib/inventory.ts'
-import { getSession } from '../../../../lib/session.ts'
+import { activeListings } from '../../../../lib/resale.ts'
+import { getSession, getUser } from '../../../../lib/session.ts'
+import { money } from '../../../../lib/format.ts'
+import { buyListing } from '../../../resale/actions.ts'
 import SeatMap from '../../../../components/SeatMap.tsx'
 import type { MapSeat, MapSection } from '../../../../components/SeatMap.tsx'
 
 export const dynamic = 'force-dynamic'
 
-export default async function Tickets({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ qty?: string }> }) {
+export default async function Tickets({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ qty?: string; error?: string }> }) {
   const { slug } = await params
   const e = getEvent(slug)
   if (!e) notFound()
   if (!eventState(e!).canBuy) redirect(`/events/${slug}`)
-  const qty = Math.min(Math.max(parseInt((await searchParams).qty ?? '', 10) || 2, 1), e!.ticket_limit)
-  if (isSoldOut(e!.id)) return <><h1>{e!.title}</h1><p><strong>Sold out.</strong></p></>
+  const sp = await searchParams
+  const qty = Math.min(Math.max(parseInt(sp.qty ?? '', 10) || 2, 1), e!.ticket_limit)
+  const listings = activeListings(e!.id, (await getUser())?.id ?? null)
+  const back = `/events/${slug}/tickets`
+  const resale = (
+    <>
+      {sp.error && <p className="error">{sp.error}</p>}
+      {listings.length > 0 && (
+        <>
+          <h2>Verified Resale</h2>
+          <p className="muted">Tickets from other fans, sold through TicketStorm. Each has a new barcode.</p>
+          {listings.map((l) => (
+            <form action={buyListing} className="card row" key={l.id}>
+              <input type="hidden" name="listingId" value={l.id} />
+              <input type="hidden" name="back" value={back} />
+              {l.row ? `Section ${l.section} Row ${l.row} Seat ${l.number}` : `General admission ${l.section}`} · {money(l.price_cents)}{' '}
+              {l.mine ? <span className="muted">Your listing</span> : l.held ? <span className="muted">Someone is checking out</span> : <button>Buy</button>}
+            </form>
+          ))}
+        </>
+      )}
+    </>
+  )
+  if (isSoldOut(e!.id)) return <><h1>{e!.title}</h1><p><strong>Sold out.</strong></p>{resale}</>
 
   const sections = (
     db
@@ -38,6 +63,7 @@ export default async function Tickets({ params, searchParams }: { params: Promis
       <h1>{e!.title}</h1>
       <p className="muted">{e!.venue} · pick seats, or let us find the best available. Tickets are held for a few minutes while you decide.</p>
       <SeatMap eventId={e!.id} ticketLimit={e!.ticket_limit} qty={qty} sections={sections} levels={levels} seats={seats} initial={getAvailability(e!.id)} hold={hold} />
+      {resale}
     </>
   )
 }

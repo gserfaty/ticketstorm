@@ -4,6 +4,7 @@ import { HoldError } from './inventory.ts'
 import { recordCharge, refund } from './payments.ts'
 import type { Payment } from './payments.ts'
 import { quote } from './pricing.ts'
+import { settleListing } from './resale.ts'
 import { APP_URL, notify, sendEmail } from './notify.ts'
 import { money } from './format.ts'
 
@@ -62,9 +63,14 @@ function createOrder(p: Payment): number {
   if (!q.lines.length || q.total !== p.amount) throw new HoldError('Price changed', 409)
   const m = JSON.parse(p.meta!) as Meta
 
-  // hold_id match + exact count: any row lost to another hold or expiry rolls the whole thing back
-  const sold = db.prepare("UPDATE inventory SET status = 'sold', held_until = NULL WHERE hold_id = ? AND status = 'held' AND held_until > ?").run(hold.id, now)
-  if (sold.changes !== q.lines.length) throw new HoldError('Your tickets are no longer held', 409)
+  // Resale hold: the seat is already sold; settle the listing (seller ticket 'resold', ledger credit) so the buyer's new ticket can be inserted below.
+  // Otherwise: hold_id match + exact count, any row lost to another hold or expiry rolls the whole thing back.
+  const listingId = q.lines[0].listingId
+  if (listingId) settleListing(listingId, hold.id, m.userId)
+  else {
+    const sold = db.prepare("UPDATE inventory SET status = 'sold', held_until = NULL WHERE hold_id = ? AND status = 'held' AND held_until > ?").run(hold.id, now)
+    if (sold.changes !== q.lines.length) throw new HoldError('Your tickets are no longer held', 409)
+  }
 
   const accessToken = randomBytes(16).toString('hex')
   const order = db
@@ -162,6 +168,10 @@ export function refundEvent(eventId: number): { refunded: number; failed: number
     db.prepare("UPDATE events SET status = 'cancelled' WHERE id = ?").run(eventId)
     db.prepare("UPDATE inventory SET status = 'available', hold_id = NULL, held_until = NULL WHERE status = 'held' AND hold_id IN (SELECT id FROM holds WHERE event_id = ? AND status = 'active')").run(eventId)
     db.prepare("UPDATE holds SET status = 'released' WHERE event_id = ? AND status = 'active'").run(eventId)
+    // resale listings and pending transfers die with the event
+    const mine = "ticket_id IN (SELECT t.id FROM tickets t JOIN inventory i ON i.id = t.inventory_id WHERE i.event_id = ?)"
+    db.prepare(`UPDATE listings SET status = 'cancelled', hold_id = NULL, held_until = NULL WHERE status = 'active' AND ${mine}`).run(eventId)
+    db.prepare(`UPDATE transfers SET status = 'cancelled' WHERE status = 'pending' AND ${mine}`).run(eventId)
   })
   const orders = db
     .prepare("SELECT id FROM orders WHERE event_id = ? AND (status IN ('paid','review') OR (status = 'cancelled' AND refund_error IS NOT NULL)) ORDER BY id")

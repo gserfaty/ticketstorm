@@ -238,8 +238,8 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
             const can = state === 'a' && !dim && !hold
             return (
               <g key={id} opacity={dim ? 0.2 : 1} className={`seat st-${state} ${flags ? 'ada' : ''}`} onClick={() => can || state === 'sel' ? clickSeat(id) : undefined} {...key(() => can || state === 'sel' ? clickSeat(id) : undefined)}
-                aria-label={`${seatLabel(s)}, ${usd(price(id))}, ${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', sel: 'selected', mine: 'yours' }[state]}`}
-                onPointerMove={(e) => showTip(e, `${seatLabel(s)} · ${usd(price(id))}${flags & 1 ? ' · ♿ accessible' : flags & 2 ? ' · companion' : ''} · ${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', sel: 'selected', mine: 'yours' }[state]}`)} onPointerLeave={() => setTip(null)}>
+                aria-label={`${seatLabel(s)}, ${state === 'r' ? '' : usd(price(id)) + ', '}${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', r: 'verified resale', sel: 'selected', mine: 'yours' }[state]}`}
+                onPointerMove={(e) => showTip(e, `${seatLabel(s)}${state === 'r' ? '' : ' · ' + usd(price(id))}${flags & 1 ? ' · ♿ accessible' : flags & 2 ? ' · companion' : ''} · ${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', r: 'verified resale', sel: 'selected', mine: 'yours' }[state]}`)} onPointerLeave={() => setTip(null)}>
                 <circle cx={x} cy={y} r={r} fill={state === 'a' ? (levelById.get(st?.[2] ?? 0)?.color ?? '#3b82f6') : undefined} />
                 {(flags & 1) > 0 && <text x={x} y={y} fontSize={r * 1.5} textAnchor="middle" dominantBaseline="central" pointerEvents="none">♿</text>}
               </g>
@@ -262,7 +262,7 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
         <li><i className="st-s" /> Sold</li>
         <li><i className="st-b" /> Unavailable</li>
         <li>♿ Accessible</li>
-        <li className="muted"><i className="st-resale" /> Resale (coming soon)</li>
+        <li><i className="st-r" /> Verified Resale (buy below the map)</li>
       </ul>
 
       <div role="status" aria-live="polite">{msg && <p className={msg.error ? 'error' : 'notice'}>{msg.text}</p>}</div>

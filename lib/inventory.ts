@@ -39,8 +39,9 @@ export function generateInventory(eventId: number, bundleSection: string | null 
   ).run(eventId)
 }
 
-function free(holdId: number) {
+export function free(holdId: number) {
   db.prepare("UPDATE holds SET status = 'released' WHERE id = ?").run(holdId)
+  db.prepare('UPDATE listings SET hold_id = NULL, held_until = NULL WHERE hold_id = ?').run(holdId)
   db.prepare("UPDATE inventory SET status = 'available', hold_id = NULL, held_until = NULL WHERE hold_id = ? AND status = 'held'").run(holdId)
 }
 
@@ -159,10 +160,13 @@ export function getAvailability(eventId: number) {
   const now = new Date().toISOString()
   const seats = db
     .prepare(
-      `SELECT id, CASE WHEN window_id IS NOT NULL THEN 'b' WHEN status = 'held' THEN CASE WHEN held_until < ? THEN 'a' ELSE 'h' END ELSE substr(status, 1, 1) END AS st, price_level_id AS lv
+      `SELECT id, CASE WHEN window_id IS NOT NULL THEN 'b' WHEN status = 'held' THEN CASE WHEN held_until < ? THEN 'a' ELSE 'h' END
+         WHEN status = 'sold' THEN coalesce((SELECT CASE WHEN l.held_until > ? THEN 'h' ELSE 'r' END FROM listings l JOIN tickets t ON t.id = l.ticket_id
+           WHERE t.inventory_id = inventory.id AND t.status = 'listed' AND l.status = 'active' AND l.expires_at > ?), 's')
+         ELSE substr(status, 1, 1) END AS st, price_level_id AS lv
        FROM inventory WHERE event_id = ? AND seat_id IS NOT NULL ORDER BY id`,
     )
-    .all(now, eventId) as { id: number; st: string; lv: number }[]
+    .all(now, now, now, eventId) as { id: number; st: string; lv: number }[]
   const ga = db
     .prepare(
       `SELECT section_id AS sectionId, price_level_id AS levelId, count(*) AS total,
