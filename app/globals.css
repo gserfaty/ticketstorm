@@ -1,0 +1,19 @@
+:root { --bg:#0f1020; --panel:#1a1b33; --fg:#eef; --muted:#9aa; --accent:#3b82f6; --bad:#f87171; --ok:#4ade80; }
+* { box-sizing: border-box }
+body { margin:0; font:16px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg) }
+a { color:var(--accent) }
+main { max-width:1000px; margin:0 auto; padding:1rem }
+.top { display:flex; gap:1rem; align-items:center; flex-wrap:wrap; padding:.75rem 1rem; background:var(--panel) }
+.brand { font-weight:700; font-size:1.25rem; color:var(--fg); text-decoration:none }
+.search { flex:1; min-width:180px }
+.search input { width:100% }
+input, select, button { font:inherit; padding:.4rem .6rem; border-radius:6px; border:1px solid #445; background:#0b0c1a; color:var(--fg) }
+button { background:var(--accent); border-color:var(--accent); cursor:pointer }
+.account { position:relative }
+.account summary { cursor:pointer }
+.account nav { position:absolute; right:0; z-index:2; display:flex; flex-direction:column; gap:.5rem; min-width:200px; padding:.75rem; background:var(--panel); border:1px solid #445; border-radius:6px }
+form.stack { display:flex; flex-direction:column; gap:.75rem; max-width:360px }
+.error { color:var(--bad) } .notice { color:var(--ok) }
+.card { background:var(--panel); padding:.75rem 1rem; margin:.5rem 0; border-radius:8px }
+.muted { color:var(--muted) }
+pre { white-space:pre-wrap; word-break:break-word; margin:0 }
