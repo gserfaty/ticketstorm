@@ -6,6 +6,7 @@ import { approveReview, holdOrder } from '../../lib/fraud.ts'
 import { refundFromForm } from '../../lib/orderadmin.ts'
 import { refundEvent, refundOrder, sendConfirmation } from '../../lib/orders.ts'
 import { resolveDispute } from '../../lib/disputes.ts'
+import { decideReview } from '../../lib/reviews.ts'
 import { decideClaim } from '../../lib/protection.ts'
 import { audit, setFlag, UserError } from '../../lib/platform.ts'
 import { setCityTax, setFeeDefaults } from '../../lib/pricing.ts'
@@ -290,4 +291,11 @@ export async function disputeDecision(f: FormData) {
     const r = resolveDispute(admin.id, num(f, 'disputeId'), text(f, 'outcome'), text(f, 'note'))
     audit(admin.id, `dispute.${text(f, 'outcome')}`, `order:${r.orderId}`, { disputeId: num(f, 'disputeId'), refunded: r.refunded, note: text(f, 'note') })
   }, 'Dispute resolved')
+}
+
+export async function reviewDecision(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'reviewId')
+  const approve = text(f, 'decision') === 'approve'
+  run('/admin/reviews', () => { decideReview(admin.id, id, approve); audit(admin.id, approve ? 'review.approve' : 'review.reject', `review:${id}`) }, approve ? 'Approved' : 'Rejected')
 }

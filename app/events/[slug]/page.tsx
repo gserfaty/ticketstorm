@@ -20,6 +20,8 @@ import { pageMeta } from '../../../lib/seo.ts'
 import { weather } from '../../../lib/weather.ts'
 import EventCard from '../../../components/EventCard.tsx'
 import MiniMap from '../../../components/MiniMap.tsx'
+import Reviews from '../../../components/Reviews.tsx'
+import { approvedReviews, attended } from '../../../lib/reviews.ts'
 import Until from '../../../components/Until.tsx'
 
 type Win = { id: number; name: string; kind: string; starts_at: string; ends_at: string; requires_code: number; reg_starts: string | null; reg_ends: string | null; lottery_at: string | null }
@@ -148,6 +150,8 @@ export default async function EventPage({ params, searchParams }: { params: Prom
           <ul>{others.map((o) => <li key={o.id}><Link href={`/events/${o.slug}`}>{fmtDateTime(o.starts_at, o.tz)}</Link> · {o.venue}, {o.city}</li>)}</ul>
         </>
       )}
+      <Reviews kind="event" refId={e!.id} back={`/events/${e!.slug}`} {...approvedReviews('event', e!.id)} loggedIn={!!user}
+        canWrite={!!user && attended(user.id, 'event', e!.id) && !db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND event_id = ?').get(user.id, e!.id)} />
       <h2>Getting there</h2>
       <MiniMap lat={e!.vlat} lng={e!.vlng} name={e!.venue} />
       <p><a href={`https://www.openstreetmap.org/directions?to=${e!.vlat}%2C${e!.vlng}`} rel="noopener noreferrer" target="_blank">Get directions to {e!.venue}</a> (OpenStreetMap)</p>

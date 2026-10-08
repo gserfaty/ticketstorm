@@ -9,6 +9,7 @@ import { finalize } from '../lib/orders.ts'
 import { createListing } from '../lib/resale.ts'
 import { makeOffer } from '../lib/offers.ts'
 import { purchaseGift, redeemToCredit } from '../lib/giftcards.ts'
+import { decideReview, submitReview } from '../lib/reviews.ts'
 import { settleEvent } from '../lib/reports.ts'
 import { addMessage, createContact } from '../lib/support.ts'
 import { scanTicket } from '../lib/scan.ts'
@@ -535,6 +536,32 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   const owner = { sessionToken: 'seed-dispute-session', userId: uid('fan2@ticketstorm.test') }
   const held = holdBestAvailable(wed.id, owner, 1)
   finalize({ holdId: held.holdId, sessionToken: owner.sessionToken, userId: owner.userId, email: 'fan2@ticketstorm.test', key: 'seed-dispute-order', method: 'card', brand: 'Visa', last4: '0341', exp: '12/39', save: false, billing: { name: 'Fiona Fan', address: '2 Main St', city: 'New York', zip: '10001' } })
+}
+
+// P12B (content): more add-on kinds (VIP upgrade, food pre-order, camping, shuttle), a team page with season tickets, artist music/social links,
+// reviews (fan@ attended the settled show: one approved, one waiting for /admin/reviews) and fan@'s opt-in to the weekly digest email.
+{
+  const ev = (slug: string) => (db.prepare('SELECT id FROM events WHERE slug = ?').get(slug) as { id: number }).id
+  const addon = db.prepare('INSERT INTO addons (event_id, kind, name, price_cents, inventory) VALUES (?,?,?,?,?)')
+  const sat = ev('neon-harbor-empire-saturday')
+  addon.run(sat, 'vip', 'VIP upgrade (early entry + lounge)', 6000, 20)
+  addon.run(sat, 'food', 'Food pre-order: nachos and a drink', 1800, 60)
+  addon.run(sat, 'shuttle', 'Shuttle from Midtown', 1000, 40)
+  const cat = ev('neon-harbor-catskill-saturday')
+  addon.run(cat, 'camping', 'Camping pitch, Friday and Saturday', 4500, 15)
+  addon.run(cat, 'merch', 'Festival poster', 2500, 100)
+  addon.run(cat, 'shuttle', 'Shuttle from Kingston station', 1200, 30)
+  db.prepare("UPDATE artists SET kind = 'team', bio = ?, links = ? WHERE id = (SELECT artist_id FROM event_artists WHERE event_id = ? LIMIT 1)").run(
+    'Home games at Empire Arena. The season bundle gets you the same seat for all three home stands.', json({ website: 'https://example.com/team', video: 'https://example.com/team/highlights' }), ev('home-stand-1'))
+  db.prepare('UPDATE artists SET links = ? WHERE slug = ?').run(json({ website: 'https://example.com/neon-harbor', spotify: 'https://example.com/spotify/neon-harbor', youtube: 'https://example.com/youtube/neon-harbor', instagram: 'https://example.com/instagram/neon-harbor' }), 'neon-harbor')
+  db.prepare('UPDATE artists SET links = ? WHERE slug = ?').run(json({ spotify: 'https://example.com/spotify/cora-valdez', instagram: 'https://example.com/instagram/cora-valdez' }), 'cora-valdez')
+  const fan = (db.prepare("SELECT id FROM users WHERE email = 'fan@ticketstorm.test'").get() as { id: number }).id
+  const settled = ev('storm-settled-demo')
+  const venueId = (db.prepare('SELECT venue_id AS v FROM events WHERE id = ?').get(settled) as { v: number }).v
+  submitReview(fan, 'event', settled, 5, 'Great night: easy entry, great sound, the scanner line moved fast.')
+  decideReview((db.prepare("SELECT id FROM users WHERE role = 'admin'").get() as { id: number }).id, 1, true)
+  submitReview(fan, 'venue', venueId, 4, 'Good sightlines from the 200 level. Parking is tight.')
+  db.prepare("UPDATE users SET notif_prefs = ? WHERE id = ?").run(json({ marketing_email: true }), fan)
 }
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

@@ -2,6 +2,7 @@ import { db, tx } from './db.ts'
 import { promoteWaitlist, releaseEndedWindows, runLottery } from './access.ts'
 import { runAlerts } from './alerts.ts'
 import { chargeDueInstallments } from './installments.ts'
+import { runDigest } from './digest.ts'
 import { expireListings } from './resale.ts'
 import { expireTransfers } from './transfers.ts'
 
@@ -25,6 +26,7 @@ export function runJobs() {
   expireTransfers()
   expireListings()
   runAlerts()
+  runDigest()
 }
 
 // Called from the root layout: at most once per 30s.

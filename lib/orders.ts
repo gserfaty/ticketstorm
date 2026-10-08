@@ -43,7 +43,7 @@ export type PayResult = { orderId: number } | { declined: string } | { threeDs: 
 
 export const validSrc = (s?: string | null): s is string => !!s && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(s)
 // add-on kinds that get a scannable pass
-export const PASS_KINDS = ['parking', 'hospitality']
+export const PASS_KINDS = ['parking', 'hospitality', 'vip', 'camping', 'shuttle']
 
 type Meta = Pick<PayInput, 'userId' | 'email' | 'exp' | 'save' | 'billing' | 'src' | 'delivery' | 'ip' | 'cardFp'> & { total?: number; installments?: boolean; gift?: { id: number; amount: number }; credit?: number } // total: full price when the payment is only the first quarter
 

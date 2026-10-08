@@ -128,7 +128,8 @@ CREATE TABLE IF NOT EXISTS artists (
   bio TEXT,
   image TEXT,
   genres TEXT,
-  links TEXT
+  links TEXT,
+  kind TEXT NOT NULL DEFAULT 'artist' CHECK (kind IN ('artist','team')) -- a team page shows the home schedule and season tickets
 );
 
 CREATE TABLE IF NOT EXISTS artist_related (
@@ -723,3 +724,20 @@ CREATE TABLE IF NOT EXISTS events_log (
   kind TEXT NOT NULL CHECK (kind IN ('view','hold','order'))
 );
 CREATE INDEX IF NOT EXISTS events_log_event ON events_log(event_id, kind);
+
+-- Reviews of an event or a venue by someone who attended (owns a scanned ticket). One per user per target; shown only once an admin approves.
+CREATE TABLE IF NOT EXISTS reviews (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  event_id INTEGER REFERENCES events(id),
+  venue_id INTEGER REFERENCES venues(id),
+  rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  decided_by INTEGER REFERENCES users(id),
+  decided_at TEXT,
+  CHECK ((event_id IS NULL) <> (venue_id IS NULL)),
+  UNIQUE (user_id, event_id),
+  UNIQUE (user_id, venue_id)
+);

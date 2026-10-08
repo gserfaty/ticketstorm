@@ -4,6 +4,11 @@ import ChartPreview from '../../../components/ChartPreview.tsx'
 import EventCard from '../../../components/EventCard.tsx'
 import Heart from '../../../components/Heart.tsx'
 import MiniMap from '../../../components/MiniMap.tsx'
+import Flash from '../../../components/Flash.tsx'
+import Reviews from '../../../components/Reviews.tsx'
+import SeatView from '../../../components/SeatView.tsx'
+import { approvedReviews, attended } from '../../../lib/reviews.ts'
+import { getUser } from '../../../lib/session.ts'
 import { db } from '../../../lib/db.ts'
 import { listEvents } from '../../../lib/events.ts'
 import { pageMeta } from '../../../lib/seo.ts'
@@ -17,7 +22,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   return v ? pageMeta(`${v.name}, ${v.city}: events and seating chart`, `Upcoming events, seating chart, parking and accessibility at ${v.name}, ${v.address}, ${v.city}.`, `/venues/${v.slug}`) : {}
 }
 
-export default async function VenuePage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function VenuePage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ error?: string; notice?: string }> }) {
   const v = db
     .prepare('SELECT v.id, v.slug, v.name, v.address, v.lat, v.lng, v.capacity, v.info, c.name AS city, c.state FROM venues v JOIN cities c ON c.id = v.city_id WHERE v.slug = ?')
     .get((await params).slug) as { id: number; slug: string; name: string; address: string; lat: number; lng: number; capacity: number; info: string | null; city: string; state: string } | undefined
@@ -28,6 +33,13 @@ export default async function VenuePage({ params }: { params: Promise<{ slug: st
   const adaSeats = (db.prepare('SELECT count(*) AS n FROM seats st JOIN sections s ON s.id = st.section_id WHERE s.venue_id = ? AND st.accessible = 1').get(v!.id) as { n: number }).n
   const others = (db.prepare('SELECT name, lat, lng FROM venues WHERE id != ?').all(v!.id) as { name: string; lat: number; lng: number }[]).map((o) => ({ ...o }))
   const events = listEvents('e.venue_id = ?', [v!.id])
+  const user = await getUser()
+  const sp = await searchParams
+  // one middle seat per reserved section, drawn with the same generated view-from-seat as the seat map (an illustration, not a photo)
+  const views = db
+    .prepare(`SELECT s.name, st.x, st.y, st.row, st.number, st.obstructed FROM sections s JOIN seats st ON st.id = (SELECT id FROM seats WHERE section_id = s.id ORDER BY row, number LIMIT 1 OFFSET (SELECT count(*) / 2 FROM seats WHERE section_id = s.id))
+      WHERE s.venue_id = ? AND s.kind = 'reserved' ORDER BY s.rank, s.id LIMIT 6`)
+    .all(v!.id) as { name: string; x: number; y: number; row: string; number: number; obstructed: number }[]
   const tabs: [string, string | undefined][] = [['Parking', info.parking], ['Public transit', info.transit], ['Bag policy', info.bag]]
   return (
     <>
@@ -46,9 +58,18 @@ export default async function VenuePage({ params }: { params: Promise<{ slug: st
         <p><Link href={`/support/ada?venue=${v!.slug}`}>Request an accessibility accommodation</Link></p>
       </details>
       {!!info.faq?.length && <details className="info"><summary>FAQ</summary>{info.faq.map((f) => <p key={f.q}><strong>{f.q}</strong><br />{f.a}</p>)}</details>}
+      {views.length > 0 && (
+        <>
+          <h2>Views from the seats</h2>
+          <div className="row">{views.map((w) => <div key={w.name}><SeatView x={w.x} y={w.y} obstructed={!!w.obstructed} label={`Section ${w.name} Row ${w.row} Seat ${w.number}`} /><p className="muted">Section {w.name}, Row {w.row}, Seat {w.number}</p></div>)}</div>
+        </>
+      )}
       <h2>Upcoming events</h2>
       {events.map((e) => <EventCard key={e.id} e={e} />)}
       {events.length === 0 && <p className="muted">No upcoming events.</p>}
+      <Flash {...sp} />
+      <Reviews kind="venue" refId={v!.id} back={`/venues/${v!.slug}`} {...approvedReviews('venue', v!.id)} loggedIn={!!user}
+        canWrite={!!user && attended(user.id, 'venue', v!.id) && !db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND venue_id = ?').get(user.id, v!.id)} />
     </>
   )
 }

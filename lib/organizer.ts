@@ -246,9 +246,10 @@ export function setOffer(eventId: number, name: string, pct: unknown) {
   else db.prepare('INSERT INTO offers (event_id, name, pct_off) VALUES (?,?,?) ON CONFLICT(event_id, name) DO UPDATE SET pct_off = excluded.pct_off').run(eventId, name, n)
 }
 
-export const ADDON_KINDS = ['parking', 'merch', 'hospitality']
+// every kind the schema allows: parking, merch, hospitality, VIP upgrade, food pre-order, camping, shuttle
+export const ADDON_KINDS = ['parking', 'merch', 'hospitality', 'vip', 'food', 'camping', 'shuttle']
 export function addAddon(eventId: number, kind: string, name: string, dollars: string, inventory: unknown) {
-  if (!ADDON_KINDS.includes(kind)) throw new UserError('Pick parking, merch or hospitality')
+  if (!ADDON_KINDS.includes(kind)) throw new UserError(`Pick one of: ${ADDON_KINDS.join(', ')}`)
   if (!name || name.length > 60) throw new UserError('Add-on name required')
   const cents = Math.round(Number(dollars) * 100)
   if (!Number.isFinite(cents) || cents < 0 || cents > 10_000_000) throw new UserError('Enter a price')

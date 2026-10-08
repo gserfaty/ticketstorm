@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { ADDON_KINDS } from '../../../../../../lib/organizer.ts'
 import Flash from '../../../../../../components/Flash.tsx'
 import { db } from '../../../../../../lib/db.ts'
 import { fmtDateTime, money, toLocalInput } from '../../../../../../lib/format.ts'
@@ -88,7 +89,7 @@ export default async function Pricing({ params, searchParams }: { params: Promis
       ))}
       <form action={addAddonAction} className="stack">
         {hidden}
-        <select name="kind" aria-label="Kind"><option>parking</option><option>merch</option><option>hospitality</option></select>
+        <select name="kind" aria-label="Kind">{ADDON_KINDS.map((k) => <option key={k}>{k}</option>)}</select>
         <input name="name" placeholder="Name (e.g. Lot A parking)" required />
         <input name="price" type="number" step="0.01" min="0" placeholder="Price $" required />
         <input name="inventory" type="number" min="0" placeholder="Inventory" required />

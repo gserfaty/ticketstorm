@@ -28,7 +28,7 @@ export default async function Favorites() {
       <h2>Venues</h2>
       {venues.map((v) => <div className="card row" key={v.id}><Link href={`/venues/${v.slug}`}>{v.name}</Link> <Heart kind="venue" id={v.id} label={v.name} /></div>)}
       {venues.length === 0 && <p className="muted">No favorite venues.</p>}
-      <p><Link href="/">Find events</Link></p>
+      <p><Link href="/favorites/import">Import artists from a list</Link> · <Link href="/">Find events</Link></p>
     </>
   )
 }

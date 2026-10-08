@@ -18,6 +18,11 @@ const { purchaseGift, findGift, redeemToCredit, newCode } = await import('../lib
 const { creditBalance, spendCredit, addCredit } = await import('../lib/stored.ts')
 const { resolveDispute } = await import('../lib/disputes.ts')
 const { settleEvent } = await import('../lib/reports.ts')
+const rev = await import('../lib/reviews.ts')
+const { runDigest, isoWeek } = await import('../lib/digest.ts')
+const { importArtists } = await import('../lib/favorites.ts')
+const { scanTicket } = await import('../lib/scan.ts')
+const { makeToken } = await import('../lib/safetix.ts')
 test.after(() => rmSync(dir, { recursive: true, force: true }))
 
 const run = (sql: string, ...a: (string | number | null)[]) => Number(db.prepare(sql).run(...a).lastInsertRowid)
@@ -252,4 +257,67 @@ test('chargeback lost: the order is refunded by a forced payment, tickets die, l
   resolveDispute(admin, get<{ id: number }>('SELECT id FROM disputes WHERE order_id = ?', c.orderId).id, 'lost', '')
   assert.ok(balance(`org:${org}`) < orgBefore)
   assert.equal(ledgerTotal(), 0)
+})
+
+test('reviews: only verified attendees (a scanned ticket) can review, once per target, shown after approval', () => {
+  const e4 = mkEvent('e4')
+  const att = user('attendee')
+  const stranger = user('stranger')
+  const admin = user('admin2')
+  const { tickets: [t] } = buy(e4, att)
+  assert.throws(() => rev.submitReview(att, 'event', e4, 5, 'bought but not scanned'), /Only people who attended/)
+  assert.throws(() => rev.submitReview(stranger, 'event', e4, 5, 'never went'), /Only people who attended/)
+  const secret = get<{ secret: string }>('SELECT secret FROM tickets WHERE id = ?', t).secret
+  assert.equal(scanTicket(e4, makeToken(t, secret), admin).result, 'valid')
+  assert.throws(() => rev.submitReview(att, 'event', e4, 6, 'x'), /1 to 5/)
+  assert.throws(() => rev.submitReview(att, 'event', e4, 4, ''), /Write a review/)
+  const id = rev.submitReview(att, 'event', e4, 4, '<script>alert(1)</script> loved it')
+  assert.throws(() => rev.submitReview(att, 'event', e4, 5, 'again'), /already reviewed/)
+  assert.deepEqual(rev.approvedReviews('event', e4).list, []) // pending: not public
+  rev.decideReview(admin, id, true)
+  assert.equal(rev.approvedReviews('event', e4).list.length, 1)
+  assert.throws(() => rev.decideReview(admin, id, false), /already decided/)
+  // the scanned ticket also makes the attendee a verified visitor of the venue; the stranger is still refused
+  assert.ok(rev.submitReview(att, 'venue', venue, 5, 'nice venue'))
+  assert.throws(() => rev.submitReview(stranger, 'venue', venue, 5, 'x'), /Only people who attended/)
+})
+
+test('weekly digest is sent once per user per ISO week and honours marketing preferences', () => {
+  const e5 = mkEvent('e5')
+  assert.ok(e5)
+  const a = user('dig-a')
+  const b = user('dig-b')
+  const c = user('dig-c')
+  db.prepare('UPDATE users SET notif_prefs = ? WHERE id = ?').run(JSON.stringify({ marketing_email: true }), a)
+  db.prepare('UPDATE users SET notif_prefs = ? WHERE id = ?').run(JSON.stringify({ marketing_inapp: false, marketing_email: false }), c)
+  const when = new Date('2031-03-05T10:00:00Z')
+  assert.equal(isoWeek(new Date('2027-01-03T00:00:00Z')), '2026-W53')
+  assert.equal(isoWeek(when), '2031-W10')
+  const mails = () => get<{ n: number }>("SELECT count(*) AS n FROM outbox WHERE subject = 'Your weekly TicketStorm digest' AND \"to\" = 'dig-a@x.test'").n
+  runDigest(when)
+  const first = mails()
+  assert.equal(first, 1)
+  const body = get<{ body: string }>("SELECT body FROM outbox WHERE \"to\" = 'dig-a@x.test' AND subject = 'Your weekly TicketStorm digest'").body
+  assert.match(body, /Unsubscribe from these emails/)
+  runDigest(when)
+  runDigest(new Date(when.getTime() + 86_400_000)) // same ISO week
+  assert.equal(mails(), 1)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM notifications WHERE user_id = ? AND kind = 'digest'", a).n, 1)
+  // b has marketing email off by default: in-app only; c switched both off: nothing at all
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM outbox WHERE \"to\" = 'dig-b@x.test' AND subject LIKE '%digest%'").n, 0)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM notifications WHERE user_id = ? AND kind = 'digest'", b).n, 1)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM notifications WHERE user_id = ? AND kind = 'digest'", c).n, 0)
+  runDigest(new Date(when.getTime() + 7 * 86_400_000)) // next week: one more
+  assert.equal(mails(), 2)
+})
+
+test('import artists matches names ignoring case and punctuation and reports the rest', () => {
+  const u = user('importer')
+  run("INSERT INTO artists (slug, name) VALUES ('the-neon-band', 'The Neon Band')")
+  run("INSERT INTO artists (slug, name) VALUES ('ac-dc-ish', 'AC/DC-ish & Co')")
+  const r = importArtists(u, 'neon band\nAC DC ish and co\nNobody We Know\nneon band')
+  assert.deepEqual(r.added.sort(), ['AC/DC-ish & Co', 'The Neon Band'])
+  assert.deepEqual(r.unmatched, ['Nobody We Know'])
+  assert.deepEqual(importArtists(u, 'The Neon Band').already, ['The Neon Band'])
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM favorites WHERE user_id = ? AND kind = 'artist'", u).n, 2)
 })
