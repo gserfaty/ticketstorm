@@ -6,7 +6,8 @@ import type { Method, Payment } from './payments.ts'
 import { allocate, quote } from './pricing.ts'
 import { ledgerAdd } from './ledger.ts'
 import { settleListing } from './resale.ts'
-import { APP_URL, notify, sendEmail } from './notify.ts'
+import { alertUser, emailUser } from './alerts.ts'
+import { APP_URL, notify } from './notify.ts'
 import { money } from './format.ts'
 import { fraudScore, REVIEW_AT } from './fraud.ts'
 import { addInstallments, plan } from './installments.ts'
@@ -143,7 +144,9 @@ function createOrder(p: Payment): number {
   const ev = db.prepare('SELECT title, starts_at FROM events WHERE id = ?').get(hold.event_id) as { title: string; starts_at: string }
   if (m.installments) addInstallments(order.id, p, q.total, ev.starts_at)
   sendConfirmation(order.id)
-  if (m.userId) notify(m.userId, 'order', review ? `Order #${order.id} is under review` : `Order #${order.id} confirmed`, ev.title, `/orders/${order.id}`)
+  // the confirmation email above already reached the buyer; the inbox / SMS "tickets delivered" alert is recorded once per order
+  if (m.userId && review) notify(m.userId, 'order', `Order #${order.id} is under review`, ev.title, `/orders/${order.id}`)
+  else if (m.userId) alertUser(m.userId, 'orders', 'ticket_delivered', `order:${order.id}`, { title: `Order #${order.id} confirmed: your tickets are ready`, body: ev.title, link: `/orders/${order.id}` }, { email: false })
   return order.id
 }
 
@@ -151,12 +154,14 @@ function createOrder(p: Payment): number {
 export function sendConfirmation(orderId: number) {
   const o = db
     .prepare(
-      `SELECT o.id, o.email, o.access_token, o.total, o.status, e.title, (SELECT count(*) FROM order_items WHERE order_id = o.id AND kind = 'ticket') AS n
+      `SELECT o.id, o.user_id, o.email, o.access_token, o.total, o.status, e.title, (SELECT count(*) FROM order_items WHERE order_id = o.id AND kind = 'ticket') AS n
        FROM orders o JOIN events e ON e.id = o.event_id WHERE o.id = ?`,
     )
-    .get(orderId) as { id: number; email: string; access_token: string; total: number; status: string; title: string; n: number }
+    .get(orderId) as { id: number; user_id: number | null; email: string; access_token: string; total: number; status: string; title: string; n: number }
   const t = `?t=${o.access_token}`
-  sendEmail(
+  emailUser(
+    o.user_id,
+    'orders',
     o.email,
     `Your TicketStorm order #${o.id}`,
     `Thanks! ${o.n} ticket(s) for ${o.title}, total ${money(o.total)}.${o.status === 'review' ? '\nYour order is being reviewed; your tickets unlock when it is approved.' : ''}\nView your order and tickets: ${APP_URL}/orders/${o.id}${t}\nReceipt: ${APP_URL}/orders/${o.id}/receipt${t}`,
@@ -313,7 +318,7 @@ function doRefund(orderId: number, opts: RefundOpts): RefundResult {
 
   if (!opts.quiet) {
     const what = opts.refund === false ? `Order #${orderId} was cancelled.` : ok ? `We refunded ${money(amount)} for order #${orderId}.` : `Your refund of ${money(amount)} for order #${orderId} could not be completed yet; we will retry.`
-    sendEmail(o.email, `Order #${orderId} update`, `${what}\n${APP_URL}/orders/${orderId}${o.user_id ? '' : `?t=${o.access_token}`}`)
+    emailUser(o.user_id, 'orders', o.email, `Order #${orderId} update`, `${what}\n${APP_URL}/orders/${orderId}${o.user_id ? '' : `?t=${o.access_token}`}`)
     if (o.user_id) notify(o.user_id, 'order', `Order #${orderId} ${status.replace('_', ' ')}`, what, `/orders/${orderId}`)
   }
   return { amount, ok, status }
@@ -355,7 +360,9 @@ export function refundEvent(eventId: number): { refunded: number; failed: number
       const after = r.ok ? 'refunded' : 'cancelled'
       if (o.status !== after) {
         const link = `${APP_URL}/orders/${id}${o.user_id ? '' : `?t=${o.access_token}`}`
-        sendEmail(
+        emailUser(
+          o.user_id,
+          'orders',
           o.email,
           `${ev.title} has been cancelled`,
           r.ok ? `${ev.title} was cancelled. Your order #${id} was refunded in full (${money(r.amount)}).\n${link}` : `${ev.title} was cancelled. Your refund of ${money(r.amount)} for order #${id} could not be completed yet; we will retry and email you.\n${link}`,

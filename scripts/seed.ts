@@ -7,6 +7,7 @@ import { addWindow, assignWindow } from '../lib/access.ts'
 import { joinQueue } from '../lib/queue.ts'
 import { finalize } from '../lib/orders.ts'
 import { createListing } from '../lib/resale.ts'
+import { toggleFavorite } from '../lib/favorites.ts'
 import { localToUtc, slugify } from '../lib/format.ts'
 import type { VenueKind } from '../lib/venue-gen.ts'
 
@@ -124,8 +125,12 @@ tx(() => {
       parking: 'On-site lots open 3 hours before doors. Prepaid parking recommended.',
       transit: 'Short walk from the nearest metro/bus stop. Rideshare drop-off at Gate A.',
       bag: 'Bags no larger than 12x6x12 in. Clear bags preferred.',
-      accessibility: 'Accessible seating and companion seats in every reserved section. Elevators at all entrances.',
-      faq: [{ q: 'What time do doors open?', a: 'One hour before showtime unless noted.' }],
+      accessibility: `Wheelchair-accessible seats with a companion seat beside each, in every reserved section. Step-free entrance at Gate A, elevators to all levels, accessible restrooms on every concourse. Assistive listening devices and ASL interpretation are available on request ${kind === 'club' ? '(standing room only: a raised viewing platform is reserved for guests who need it)' : '(ask at Guest Services)'}.`,
+      faq: [
+        { q: 'What time do doors open?', a: 'One hour before showtime unless noted.' },
+        { q: 'Can I bring a service animal?', a: 'Yes. Service animals are welcome in all areas.' },
+        { q: 'Is there a coat check?', a: 'Yes, near Gate B (cash-free).' },
+      ],
     })
     const venueId = Number(
       db.prepare('INSERT INTO venues (org_id, slug, name, address, city_id, lat, lng, tz, capacity, info) VALUES (?,?,?,?,?,?,?,?,?,?)')
@@ -146,7 +151,12 @@ tx(() => {
         .run(slugify(name), name, `${name} is a ${genre.toLowerCase()} act known for unforgettable live shows.`, json([genre]), json({})).lastInsertRowid),
     name, category, genre, slug: slugify(name),
   }))
+  db.prepare('UPDATE artists SET bio = ?, links = ? WHERE slug = ?').run(
+    'Neon Harbor is a synth-pop act from the Jersey shore: huge hooks, bigger light shows. Their Megatour is the hottest ticket of the season.',
+    json({ website: 'https://example.com/neon-harbor', video: 'https://example.com/neon-harbor/live' }), 'neon-harbor')
   const relate = db.prepare('INSERT OR IGNORE INTO artist_related (artist_id, related_id) VALUES (?,?)')
+  relate.run(artistRows[0].id, artistRows[13].id) // Neon Harbor <-> Kiko Tanaka (both Pop)
+  relate.run(artistRows[13].id, artistRows[0].id)
   for (const a of artistRows) {
     const same = artistRows.filter((b) => b.category === a.category && b.id !== a.id)
     for (let i = 0; i < 2 && same.length; i++) relate.run(a.id, pick(same).id)
@@ -263,6 +273,20 @@ tx(() => {
   db.prepare("INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type, event_ids) VALUES (?,?,?,?,?,?)")
     .run(series[0], 'Season Bundle', '#f97316', 15000, 'standard', json(series))
 
+  // P10: Cora Valdez has not announced her New York date yet. It sits in the organizer's drafts; publishing it alerts fans who follow her.
+  {
+    const cora = artistRows.find((a) => a.slug === 'cora-valdez')!
+    const v = venueRows[0]
+    const d = new Date(today + 45 * DAY)
+    const title = 'Cora Valdez: Noche de Tormenta'
+    const startsAt = localToUtc(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 20, 0, v.tz)
+    const id = Number(
+      insEvent.run(orgId, v.id, cora.slug, 'cora-valdez-noche-de-tormenta', title, 'music', cora.genre, startsAt, new Date(Date.parse(startsAt) - 3_600_000).toISOString(),
+        `${title}. One night in New York.`, json({ age: 'All ages', bag: 'Clear bags only', notices: '', set_times: [] }), 'draft', new Date(today + 10 * DAY).toISOString(), 70).lastInsertRowid)
+    insBill.run(id, cora.id, 0)
+    addLevels(id, 55, v.kind)
+  }
+
   for (const e of db.prepare('SELECT id, series_key FROM events').all() as { id: number; series_key: string }[]) {
     generateInventory(e.id, e.id === series[0] ? '202' : null)
   }
@@ -368,5 +392,23 @@ heldBack('neon-harbor-catskill-saturday', vf)
   if (status !== 'review') throw new Error(`seed: expected the Premium order to be in review, got ${status}`)
 }
 db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct', '8')").run()
+
+// P10: event page details, and fan@'s follows (created last, so only events announced afterwards alert them).
+{
+  const sets = json({
+    age: '18+ (valid ID required)', bag: 'Clear bags only, max 12x6x12 in',
+    notices: 'Gate C is closed for construction. Use Gate A or B. Doors open at 7:00 PM.',
+    set_times: [{ act: 'Opener: Midnight Pelicans', time: '19:30' }, { act: 'Neon Harbor', time: '20:30' }, { act: 'Curfew', time: '23:00' }],
+  })
+  db.prepare("UPDATE events SET info = ? WHERE slug = 'neon-harbor-empire-saturday'").run(sets)
+  // on sale in 50 minutes: inside the 1-hour reminder window as soon as the jobs run
+  db.prepare("UPDATE events SET onsale_at = ? WHERE slug = 'neon-harbor-empire-onsale-soon'").run(new Date(Date.now() + 50 * 60_000).toISOString())
+  const fan = (db.prepare("SELECT id FROM users WHERE email = 'fan@ticketstorm.test'").get() as { id: number }).id
+  const id = (table: string, col: string, v: string) => (db.prepare(`SELECT id FROM ${table} WHERE ${col} = ?`).get(v) as { id: number }).id
+  db.prepare('UPDATE users SET home_city_id = (SELECT id FROM cities WHERE name = ?), alert_radius_mi = 100 WHERE id = ?').run('New York', fan)
+  toggleFavorite(fan, 'artist', id('artists', 'slug', 'cora-valdez')) // her New York date is a draft: publish it as organizer@
+  toggleFavorite(fan, 'event', id('events', 'slug', 'neon-harbor-empire-saturday')) // price-drop watch: lower a level in the organizer's pricing
+  toggleFavorite(fan, 'event', id('events', 'slug', 'neon-harbor-empire-onsale-soon')) // on-sale reminder
+}
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

@@ -14,7 +14,7 @@ import type { MapSeat, MapSection } from '../../../../components/SeatMap.tsx'
 
 export const dynamic = 'force-dynamic'
 
-export default async function Tickets({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ qty?: string; error?: string }> }) {
+export default async function Tickets({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ qty?: string; error?: string; accessible?: string }> }) {
   const { slug } = await params
   const e = getEvent(slug)
   if (!e) notFound()
@@ -72,7 +72,7 @@ export default async function Tickets({ params, searchParams }: { params: Promis
     <>
       <h1>{e!.title}</h1>
       <p className="muted">{e!.venue} · pick seats, or let us find the best available. Tickets are held for a few minutes while you decide.</p>
-      <SeatMap eventId={e!.id} ticketLimit={limit} allIn={allIn} qty={qty} sections={sections} levels={levels} seats={seats} initial={getAvailability(e!.id, win)} hold={hold} />
+      <SeatMap eventId={e!.id} ticketLimit={limit} allIn={allIn} qty={qty} sections={sections} levels={levels} seats={seats} initial={getAvailability(e!.id, win)} hold={hold} accessibleFirst={sp.accessible === '1'} />
       {resale}
     </>
   )

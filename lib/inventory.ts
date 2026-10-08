@@ -179,14 +179,49 @@ function place(eventId: number, owner: Owner, qty: number, pick: (win: number[],
   })
 }
 
-export function holdSeats(eventId: number, owner: Owner, seatIds: number[]): Held {
+// Each accessible seat in `ids` with the companion seat beside it (same section and row, number +/- 1, flagged companion; the next number wins).
+// Only companions not already in `ids`. `free` = that companion can be held right now.
+function companionsFor(eventId: number, ids: number[]): { acc: number; comp: number; label: string; free: boolean }[] {
+  const now = new Date().toISOString()
+  const rows = db
+    .prepare(
+      `SELECT a.id AS acc, c.id AS comp, 'Section ' || s.name || ' Row ' || sc.row || ' Seat ' || sc.number AS label,
+         (c.status = 'available' OR (c.status = 'held' AND c.held_until < ?)) AS free
+       FROM inventory a JOIN seats sa ON sa.id = a.seat_id AND sa.accessible = 1
+       JOIN seats sc ON sc.section_id = sa.section_id AND sc.row = sa.row AND sc.companion = 1 AND sc.number IN (sa.number + 1, sa.number - 1)
+       JOIN inventory c ON c.event_id = a.event_id AND c.seat_id = sc.id JOIN sections s ON s.id = sc.section_id
+       WHERE a.event_id = ? AND a.id IN (${marks(ids.length)}) ORDER BY a.id, sc.number - sa.number DESC`,
+    )
+    .all(now, eventId, ...ids) as { acc: number; comp: number; label: string; free: number }[]
+  const out = new Map<number, { acc: number; comp: number; label: string; free: boolean }>()
+  for (const r of rows) if (!out.has(r.acc)) out.set(r.acc, { ...r, free: !!r.free })
+  return [...out.values()].filter((c) => !ids.includes(c.comp))
+}
+
+// Choosing an accessible seat also holds its linked companion seat in the SAME transaction (`companion` false opts out).
+// The companion counts toward the order and account ticket limits, must be free, and the whole selection passes the orphan rule.
+export function holdSeats(eventId: number, owner: Owner, seatIds: number[], companion = true): Held {
   const ids = [...new Set(seatIds)]
   if (ids.length !== seatIds.length) throw new HoldError('Duplicate seats', 400)
   return place(eventId, owner, ids.length, (win, pub) => {
     const found = db.prepare(`SELECT id FROM inventory WHERE event_id = ? AND seat_id IS NOT NULL AND id IN (${marks(ids.length)})`).all(eventId, ...ids)
     if (found.length !== ids.length) throw new HoldError('Unknown seat', 400)
-    assertNoOrphans(eventId, ids, win, pub)
-    return ids
+    const extra = companion ? companionsFor(eventId, ids) : []
+    const taken = extra.find((c) => !c.free)
+    if (taken) throw new HoldError(`The companion seat (${taken.label}) is not available. Choose another accessible seat, or hold this one without a companion.`)
+    const all = [...new Set([...ids, ...extra.map((c) => c.comp)])]
+    if (all.length > ids.length) {
+      const ev = db.prepare('SELECT ticket_limit, order_limit FROM events WHERE id = ?').get(eventId) as { ticket_limit: number; order_limit: number | null }
+      try {
+        if (all.length > orderLimit(ev)) throw new HoldError(`${orderLimit(ev)} tickets per order`)
+        assertTicketLimit(owner.userId, eventId, all.length, owner.sessionToken) // our own old hold is already freed here
+      } catch (e) {
+        if (e instanceof HoldError) throw new HoldError(`There is no room under your ticket limit for the companion seat too (${e.message}). Hold this seat without a companion, or choose fewer seats.`)
+        throw e
+      }
+    }
+    assertNoOrphans(eventId, all, win, pub)
+    return all
   })
 }
 

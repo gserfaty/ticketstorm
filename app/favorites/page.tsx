@@ -9,9 +9,8 @@ import { requireUser } from '../../lib/session.ts'
 export const dynamic = 'force-dynamic'
 
 const names = (table: 'artists' | 'venues', ids: number[]) =>
-  ids.length ? (db.prepare(`SELECT id, name FROM ${table} WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY name`).all(...ids) as { id: number; name: string }[]) : []
+  ids.length ? (db.prepare(`SELECT id, name, slug FROM ${table} WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY name`).all(...ids) as { id: number; name: string; slug: string }[]) : []
 
-// Artist and venue pages arrive in P10; until then they are listed by name.
 export default async function Favorites() {
   const user = await requireUser()
   const events = eventsByIds(favoriteIds(user.id, 'event'))
@@ -24,10 +23,10 @@ export default async function Favorites() {
       {events.map((e) => <EventCard key={e.id} e={e} />)}
       {events.length === 0 && <p className="muted">No favorite events. Tap ♡ on an event.</p>}
       <h2>Artists</h2>
-      {artists.map((a) => <div className="card row" key={a.id}>{a.name} <Heart kind="artist" id={a.id} label={a.name} /></div>)}
+      {artists.map((a) => <div className="card row" key={a.id}><Link href={`/artists/${a.slug}`}>{a.name}</Link> <Heart kind="artist" id={a.id} label={a.name} /></div>)}
       {artists.length === 0 && <p className="muted">No favorite artists. Tap ♡ next to a lineup on an event page.</p>}
       <h2>Venues</h2>
-      {venues.map((v) => <div className="card row" key={v.id}>{v.name} <Heart kind="venue" id={v.id} label={v.name} /></div>)}
+      {venues.map((v) => <div className="card row" key={v.id}><Link href={`/venues/${v.slug}`}>{v.name}</Link> <Heart kind="venue" id={v.id} label={v.name} /></div>)}
       {venues.length === 0 && <p className="muted">No favorite venues.</p>}
       <p><Link href="/">Find events</Link></p>
     </>

@@ -11,7 +11,7 @@ export type MapSeat = [number, number, string, number, number, number, number]
 export type Avail = { seats: (readonly [number, string, number])[]; ga: { sectionId: number; levelId: number; total: number; free: number }[] }
 export type Hold = { id: number; expiresAt: string; seatIds: number[]; ga: { sectionId: number; qty: number } | null }
 
-type Props = { eventId: number; ticketLimit: number; allIn: boolean; qty: number; sections: MapSection[]; levels: MapLevel[]; seats: MapSeat[]; initial: Avail; hold: Hold | null }
+type Props = { eventId: number; ticketLimit: number; allIn: boolean; qty: number; sections: MapSection[]; levels: MapLevel[]; seats: MapSeat[]; initial: Avail; hold: Hold | null; accessibleFirst?: boolean }
 type VB = { x: number; y: number; w: number; h: number }
 
 const W = 1000
@@ -42,7 +42,7 @@ function seatRadius(ss: MapSeat[]) {
   return Math.min(gap(ss.map((s) => s[4])), gap(ss.map((s) => s[5]))) * 0.42
 }
 
-export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, levels, seats, initial, hold: initialHold }: Props) {
+export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, levels, seats, initial, hold: initialHold, accessibleFirst = false }: Props) {
   const [avail, setAvail] = useState(initial)
   const [hold, setHold] = useState(initialHold)
   const [selected, setSelected] = useState<number[]>([])
@@ -50,7 +50,8 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
   const [vb, setVb] = useState<VB>(FULL)
   const [sort, setSort] = useState<'price' | 'best'>('price')
   const [maxPrice, setMaxPrice] = useState(Math.max(...levels.map((l) => l.cents)))
-  const [adaOnly, setAdaOnly] = useState(false)
+  const [adaOnly, setAdaOnly] = useState(accessibleFirst)
+  const [companion, setCompanion] = useState(true) // an accessible seat also holds the companion seat beside it
   const [bestQty, setBestQty] = useState(qty)
   const [bestLevel, setBestLevel] = useState(0)
   const [gaQty, setGaQty] = useState(Math.min(qty, ticketLimit))
@@ -335,10 +336,13 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
       ) : selected.length > 0 && (
         <div className="card">
           <strong>{selected.length} selected</strong> · {usd(total)}
+          {listed.some((s) => s[6] & 1) && (
+            <p><label><input type="checkbox" checked={companion} onChange={(e) => setCompanion(e.target.checked)} /> Also hold the companion seat beside each accessible seat (counts toward your ticket limit)</label></p>
+          )}
           <ul>
             {listed.map((s) => <li key={s[0]}>{seatLabel(s)} · {usd(price(s[0]))} <button aria-label="Remove" onClick={() => { dragged.current = false; clickSeat(s[0]) }}>×</button></li>)}
           </ul>
-          <button disabled={busy} onClick={() => post({ seatIds: selected })}>Hold {selected.length} seat{selected.length === 1 ? '' : 's'}</button>
+          <button disabled={busy} onClick={() => post({ seatIds: selected, companion })}>Hold {selected.length} seat{selected.length === 1 ? '' : 's'}</button>
         </div>
       )}
     </div>

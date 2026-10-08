@@ -1,5 +1,6 @@
 import { randomInt } from 'node:crypto'
 import { db } from './db.ts'
+import { alertUser } from './alerts.ts'
 import { notify } from './notify.ts'
 
 // An order scoring REVIEW_AT or more goes to 'review': its tickets are not scannable, transferable or sellable until an admin approves it.
@@ -39,6 +40,6 @@ export function holdOrder(orderId: number, reason: string): boolean {
 // review -> paid. `onlyReason` limits it to holds of one kind (an organizer may release its own hold, not a fraud hold). False if nothing changed.
 export function approveReview(orderId: number, onlyReason?: string): boolean {
   const o = db.prepare("UPDATE orders SET status = 'paid', review_reason = NULL WHERE id = ? AND status = 'review' AND (? IS NULL OR review_reason = ?) RETURNING user_id").get(orderId, onlyReason ?? null, onlyReason ?? null) as { user_id: number | null } | undefined
-  if (o?.user_id) notify(o.user_id, 'order', `Order #${orderId} approved`, 'Your tickets are ready.', `/orders/${orderId}`)
+  if (o?.user_id) alertUser(o.user_id, 'orders', 'ticket_delivered', `order:${orderId}`, { title: `Order #${orderId} approved: your tickets are ready`, body: 'Your tickets are ready.', link: `/orders/${orderId}` })
   return !!o
 }

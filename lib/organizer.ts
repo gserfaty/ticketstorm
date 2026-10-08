@@ -3,7 +3,8 @@ import { db, tx } from './db.ts'
 import { CATEGORIES } from './events.ts'
 import { fmtDateTimeTz, slugify } from './format.ts'
 import { generateInventory } from './inventory.ts'
-import { notify, sendEmail, APP_URL } from './notify.ts'
+import { emailUser } from './alerts.ts'
+import { notify, APP_URL } from './notify.ts'
 import { flagOn, UserError } from './platform.ts'
 import { generateVenue, venueCapacity } from './venue-gen.ts'
 import type { GenSection, VenueKind } from './venue-gen.ts'
@@ -44,9 +45,9 @@ function checkEvent(orgId: number, f: EventForm) {
   if (!db.prepare('SELECT 1 FROM venues WHERE id = ? AND org_id = ?').get(f.venueId, orgId)) throw new UserError('Pick one of your venues')
 }
 
-export function createEvent(orgId: number, f: EventForm): number {
+export function createEvent(orgId: number, f: EventForm, artistId?: number): number {
   checkEvent(orgId, f)
-  return Number(
+  const id = Number(
     db
       .prepare(
         `INSERT INTO events (org_id, venue_id, slug, title, category, genre, starts_at, doors_at, image, description, status, info)
@@ -54,6 +55,9 @@ export function createEvent(orgId: number, f: EventForm): number {
       )
       .run(orgId, f.venueId, unique(f.title), f.title, f.category, f.genre || null, f.startsAt, f.doorsAt, f.image || null, f.description || null).lastInsertRowid,
   )
+  // optional headliner, so fans following that artist hear about the show when it is published
+  if (artistId && db.prepare('SELECT 1 FROM artists WHERE id = ?').get(artistId)) db.prepare('INSERT INTO event_artists (event_id, artist_id, billing) VALUES (?,?,0)').run(id, artistId)
+  return id
 }
 
 // Venue and start time are only editable while a draft; after that use reschedule.
@@ -78,7 +82,7 @@ export function publishEvent(eventId: number) {
     if (Date.parse(ev.starts_at) < Date.now()) throw new UserError('The event date is in the past')
     if (!db.prepare('SELECT 1 FROM price_levels WHERE event_id = ?').get(eventId)) throw new UserError('Add at least one price level first')
     if (!db.prepare('SELECT 1 FROM sections WHERE venue_id = ?').get(ev.venue_id)) throw new UserError('The venue has no seating chart')
-    db.prepare("UPDATE events SET status = 'published', approved = ? WHERE id = ?").run(flagOn('require_event_approval') ? 0 : 1, eventId)
+    db.prepare("UPDATE events SET status = 'published', published_at = ?, approved = ? WHERE id = ?").run(new Date().toISOString(), flagOn('require_event_approval') ? 0 : 1, eventId)
     generateInventory(eventId)
   })
 }
@@ -108,7 +112,7 @@ export function changeDate(eventId: number, kind: 'postponed' | 'rescheduled', n
       )
       .all(eventId) as { id: number; email: string; user_id: number | null; access_token: string }[]
     for (const h of holders) {
-      sendEmail(h.email, `${ev.title} has been ${kind}`, `${ev.title} has been ${kind} (${when}). Your tickets remain valid.\n${APP_URL}/orders/${h.id}${h.user_id ? '' : `?t=${h.access_token}`}`)
+      emailUser(h.user_id, 'orders', h.email, `${ev.title} has been ${kind}`, `${ev.title} has been ${kind} (${when}). Your tickets remain valid.\n${APP_URL}/orders/${h.id}${h.user_id ? '' : `?t=${h.access_token}`}`)
       if (h.user_id) notify(h.user_id, 'order', `${ev.title} has been ${kind}`, 'Your tickets remain valid.', `/orders/${h.id}`)
     }
     // current holders who are not the buyer (transfers, resale)

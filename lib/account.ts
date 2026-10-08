@@ -27,14 +27,25 @@ export function deleteCard(userId: number, cardId: number) {
 }
 
 export const PREF_CATEGORIES = ['orders', 'alerts', 'marketing']
-export const PREF_CHANNELS = ['email', 'sms']
+export const PREF_CHANNELS = ['inapp', 'email', 'sms']
+export const PREF_LABELS: Record<string, string> = { orders: 'Orders and tickets', alerts: 'Event alerts', marketing: 'News and offers' }
 export type Prefs = Record<string, boolean>
-// default: order mail on, marketing off
-export const prefsOf = (json: string | null): Prefs => ({ orders_email: true, alerts_email: true, ...(json ? JSON.parse(json) : {}) })
+// default: inbox always on, order and alert mail on, marketing mail off, SMS off
+export const prefsOf = (json: string | null): Prefs => ({
+  orders_inapp: true, alerts_inapp: true, marketing_inapp: true, orders_email: true, alerts_email: true, ...(json ? JSON.parse(json) : {}),
+})
 export function savePrefs(userId: number, checked: string[]) {
   const prefs: Prefs = {}
   for (const c of PREF_CATEGORIES) for (const ch of PREF_CHANNELS) prefs[`${c}_${ch}`] = checked.includes(`${c}_${ch}`)
   db.prepare('UPDATE users SET notif_prefs = ? WHERE id = ?').run(JSON.stringify(prefs), userId)
+}
+
+// Where alerts about followed artists and venues are sent: events within `radius` miles of the home city.
+export function saveAlertArea(userId: number, cityId: string, radius: string) {
+  const mi = Number(radius)
+  if (!Number.isInteger(mi) || mi < 1 || mi > 3000) throw new UserError('Radius must be a whole number of miles from 1 to 3000')
+  if (cityId !== '' && !db.prepare('SELECT 1 FROM cities WHERE id = ?').get(Number(cityId))) throw new UserError('Unknown city')
+  db.prepare('UPDATE users SET home_city_id = ?, alert_radius_mi = ? WHERE id = ?').run(cityId === '' ? null : Number(cityId), mi, userId)
 }
 
 // Everything we hold about ONE user (GDPR export). Selected by the logged-in user's id only. Ticket secrets, password hashes, gateway tokens and

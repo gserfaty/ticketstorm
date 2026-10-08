@@ -71,3 +71,11 @@ textarea { font:inherit; padding:.4rem .6rem; border-radius:6px; border:1px soli
 }
 .receipt { max-width:640px }
 dialog.card { position:fixed; inset:30% auto auto 50%; transform:translateX(-50%); z-index:5; border:1px solid var(--accent); color:var(--fg) }
+
+ul.plain { list-style:none; padding:0; margin:.5rem 0 }
+.notice-banner { border:1px solid #facc15 }
+details.info { background:var(--panel); border-radius:8px; padding:.5rem 1rem; margin:.5rem 0 } details.info summary { cursor:pointer; font-weight:600 }
+.minimap { max-width:360px; width:100%; border-radius:8px; background:#0b0c1a }
+.chartprev { max-width:420px; width:100%; background:#0b0c1a; border-radius:8px }
+.unread { font-weight:700; border-left:3px solid var(--accent) }
+nav.hdr-links { display:flex; gap:.75rem; align-items:center }

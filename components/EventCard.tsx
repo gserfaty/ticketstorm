@@ -12,7 +12,7 @@ export default async function EventCard({ e }: { e: EventRow }) {
   return (
     <div className="card">
       <Link href={`/events/${e.slug}`}><strong>{e.title}</strong></Link> <span className={`badge ${s.label.toLowerCase().replace(' ', '-')}`}>{s.label}</span> <Heart kind="event" id={e.id} label={e.title} />
-      <div className="muted">{e.venue}, {e.city} · {fmtDateTime(e.starts_at, e.tz)}</div>
+      <div className="muted"><Link href={`/venues/${e.venue_slug}`}>{e.venue}</Link>, {e.city} · {fmtDateTime(e.starts_at, e.tz)}{e.hl_slug && <> · <Link href={`/artists/${e.hl_slug}`}>{e.hl_name}</Link></>}</div>
       {range && <div>{range[0] === range[1] ? money(range[0]) : `${money(range[0])} – ${money(range[1])}`}</div>}
     </div>
   )

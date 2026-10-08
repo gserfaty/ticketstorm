@@ -25,8 +25,9 @@ function reserved(name: string, x: number, y: number, w: number, h: number, rows
         number: n,
         x: Math.round((x + (w * (n - 0.5)) / perRow) * 10) / 10,
         y: Math.round((y + (h * (r + 0.5)) / rows) * 10) / 10,
-        accessible: lastRow && n <= 2 ? 1 : 0, // ADA spots at the back-left of each block
-        companion: lastRow && n === 3 ? 1 : 0,
+        // ADA spots at the back of each block, each with its companion seat right beside it (1+2, 4+5)
+        accessible: lastRow && (n === 1 || n === 4) ? 1 : 0,
+        companion: lastRow && (n === 2 || n === 5) ? 1 : 0,
         obstructed: 0,
       })
     }

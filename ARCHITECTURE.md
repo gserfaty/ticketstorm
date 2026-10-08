@@ -1,6 +1,6 @@
 # TicketStorm architecture
 
-Status: P1 to P9 of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
+Status: P1 to P10 of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
 
 ## Stack and why
 
@@ -19,9 +19,10 @@ Conventions: money is integer cents; times are UTC ISO strings and venues carry 
 
 ```
 app/            routes (server components), server actions (actions.ts files), route handlers (route.ts)
-  api/          events/[id]/inventory, holds, holds/[id], queue/[eventId], scan, suggest
+  api/          events/[id]/inventory, events/[id]/ics, holds, holds/[id], queue/[eventId], scan, suggest
   organizer/    org-scoped tools; guard.ts loads an event and checks the viewer against ITS org
   admin/ (users, orgs, events, orders, review, claims, refunds, flags, fees, taxes) scan/ checkout/ (3ds/, paypal/) orders/ (+ receipt) tickets/ (+ exchange) transfers/ sell/ listings/ favorites/ queue/ access/
+  venues/[slug] artists/[slug] inbox/ unsubscribe/ support/ada/
   account/ (profile, payment, notifications, security, privacy + export)  login/otp  auth/mock/[provider]  dev/outbox
 components/     client components: SeatMap, TicketQR, PayForm, QueueRoom, Scanner, Countdown, ...
 lib/            all business logic; no React
@@ -31,6 +32,7 @@ lib/            all business logic; no React
   payments.ts   fake gateway pricing.ts quotes, fees, dynamic prices, display, promos    safetix.ts  rotating tokens
   transfers.ts resale.ts ledger.ts    scan.ts organizer.ts platform.ts
   fraud.ts installments.ts exchange.ts protection.ts orderadmin.ts    twofa.ts social.ts account.ts
+  alerts.ts (alert pipeline, unsubscribe tokens)  ics.ts (calendar files)  support.ts (ADA / support tickets)
   queue.ts access.ts defense.ts       session.ts auth.ts jobs.ts notify.ts events.ts geo.ts format.ts venue-gen.ts
 scripts/        seed.ts, jobs.ts
 tests/          *.test.ts (+ worker files for multi-connection races)
@@ -90,6 +92,8 @@ Key constraint: `one_live_ticket` is `UNIQUE ON tickets(inventory_id) WHERE stat
 **Fan to fan**: `transfers` (partial unique `one_pending_transfer` on `ticket_id` where `pending`; random 128-bit `claim_token`), `listings` (partial unique `one_active_listing` on `ticket_id` where `active`; `hold_id` + `held_until` reserve a listing for one buyer), `ledger` (append-only; account `user:ID|org:ID|platform`), `favorites`.
 
 **Access and defense**: `onsale_windows` (kinds public, artist, venue, card, fanclub, promoter, verified_fan, sponsor; registration, lottery and promotion timestamps), `access_codes` (`CHECK (uses <= max_uses)`, optional bound `user_id`), `window_unlocks` (session to window), `vf_registrations` (UNIQUE `(window_id,user_id)`), `queue_entries` (UNIQUE `(event_id, session_token)`; index on `(event_id, admitted_at, rank)`), `rate_limits` (PK `(key, window_start)`; also burns captcha nonces), `blocklist`.
+
+**Engagement (P10)**: `favorites.last_price` (price-drop baseline for event favorites), `alerts_sent` (PK `(user_id, kind, ref)`: one row per alert ever sent), `notifications` (inbox, indexed `(user_id, read_at)`), `support_tickets` (ADA requests now; `messages` JSON thread, P11 adds replies), `users.home_city_id` + `alert_radius_mi`, `events.published_at`.
 
 **Platform**: `settings` (key/value; fee defaults, captcha secret, last job run), `feature_flags`, `audit_log`, `outbox`, `notifications`.
 
@@ -237,14 +241,37 @@ A parking or hospitality unit is an `order_items` row of kind `addon` plus a `ti
 - **Ticket limits**: `order_limit` caps one hold; `ticket_limit` is per account (and per email at finalize) across paid orders, live holds from other sessions, and the new quantity. Guests are limited per hold at hold time and by email at finalize. Resale buys count too.
 - **Bot defense** (`lib/defense.ts`): fixed-window counters in one upsert (`rate_limits`), keyed per action per IP and per account; per-IP keys use the client IP rules in `clientIp` (`TRUST_PROXY`); HMAC-derived math captcha whose nonce is burned on first use; honeypot field; `blocklist` for IPs and emails. Applied to login, queue join, checkout and presale code entry.
 
+## Search, ranking and recommendations
+
+`searchEvents` (`lib/events.ts`) builds one SQL statement: visibility, category, genre, venue slug, text (`LIKE` on title, venue, city, artist), city, and `EXISTS` subqueries for accessible (a still-buyable accessible inventory row for that event), resale (active listing on a listed ticket of that event) and presale (a window that has not ended). Sorting by relevance, date and popularity is in SQL (`ORDER BY`); radius, venue-local dates, price and distance run in JS over the rows that survive, because they need haversine, `Intl` or the all-in math. The price columns are scalar subqueries on `price_levels(event_id)`, so nothing is queried per event; all-in prices come from `shown()` with the fee rule and city tax carried on the same row. The one exception is an event with a demand-priced level, which uses `displayRange` so the filter agrees with the number on its card. `min`/`max` apply to the all-in or face price the viewer sees (the cookie is passed in), and an event matches when its range overlaps. Distance sort measures from the city filter or the `city` cookie.
+
+Recommendations (`recommendedEvents`): `score = 2 * min(genre overlap, 3) + 6 * followed artist + 4 * 0.5^(km / 150) + 3 * popularity / 100`. The genre profile is one `UNION ALL` of favorited events, past orders and followed artists' genres; candidates come from one query with the artist ids aggregated per event. Guests have an empty profile, so ranking falls back to popularity and distance.
+
+## Notifications pipeline
+
+`lib/alerts.ts` is the only place alerts are delivered.
+
+- **Idempotency**: `alertUser(user, category, kind, ref, msg)` inserts `(user, kind, ref)` into `alerts_sent` first; a conflict means "already sent" and nothing is delivered. The insert and the deliveries share a transaction (the jobs run inside `tx()`, `finalize` inside its own), so a rollback also rolls the record back. `ref` is chosen so that what must not repeat is the key: `event:<id>` for new-show and on-sale, `event:<id>:<price>` for price drops (a further, lower price is a new alert; a price already announced never is), `order:<id>` / `transfer:<id>` for deliveries.
+- **Channels**: per category (`orders`, `alerts`, `marketing`) and channel (`inapp`, `email`, `sms`) preference in `users.notif_prefs`; inbox rows are `notifications`, email and SMS are outbox rows. `emailUser` is the single door for email to a registered user: it checks the preference and appends the unsubscribe footer. Guests have no preferences and receive mail as written.
+- **Jobs**: `runJobs()` ends with `runAlerts()`. New-show and on-sale alerts find fans with a join from `events` to `favorites` (event, venue, artist branches, `UNION`), skipping pairs already in `alerts_sent` in SQL, then apply the alert radius (haversine from the home city; no home city = no filter). Price drops compare each favorited event's cheapest non-bundle face price with `favorites.last_price` and update it. "New" means `coalesce(published_at, created_at) > favorites.created_at`, so following an artist never replays old announcements.
+- **Event changes, tickets, transfers**: the existing cancel/postpone/reschedule code still does the notifying (its emails now go through `emailUser`); ticket delivered and transfer received call `alertUser` at the moment they happen.
+
+### Unsubscribe tokens
+
+`<userId>.<category>.<hex HMAC-SHA256>` where the HMAC is over `unsub:<userId>:<category>` with the server secret kept in `settings` (`lib/defense.ts mac`). `verifyUnsub` checks the shape, that the category is known, and compares signatures with `timingSafeEqual`; a changed user id, category or signature fails. `/unsubscribe` (GET and POST, no login) sets only `<category>_email` to false. Tokens do not expire (an unsubscribe link should keep working); a forged one cannot be made without the secret.
+
+### Companion seats
+
+A seat's companion is found, not stored: the seat in the same section and row, number +/- 1, with `companion = 1` (the next number wins). `holdSeats` expands the selection with `companionsFor` inside the `place()` callback, so it is the same transaction and the same conditional `UPDATE`: both seats or neither. After expansion it re-checks the per-order and per-account ticket limits (the caller's own old hold is already freed at that point), refuses with a clear message if the companion is taken, and runs the orphan-seat rule over the whole set. `companion: false` skips it. Because the link is adjacency, the chart editor's per-seat accessible/companion toggles keep working with no extra column.
+
 ## Background jobs
 
-`runJobs()` (called by `npm run jobs` and, throttled to once per 30 seconds, by the root layout): in one transaction delete expired sessions and codes, return expired held inventory to `available` and mark expired holds `released`, drop old rate-limit rows and long-expired queue entries, release ended presale windows, record `last_jobs_run`. Then run the Verified Fan lottery and waitlist promotion (each in its own transaction, each idempotent) and `chargeDueInstallments()` (pay in 4: one claimed row per transaction). Correctness never depends on jobs because expiry is lazy.
+`runJobs()` (called by `npm run jobs` and, throttled to once per 30 seconds, by the root layout): in one transaction delete expired sessions and codes, return expired held inventory to `available` and mark expired holds `released`, drop old rate-limit rows and long-expired queue entries, release ended presale windows, record `last_jobs_run`. Then run the Verified Fan lottery and waitlist promotion (each in its own transaction, each idempotent) `chargeDueInstallments()` (pay in 4: one claimed row per transaction) and `runAlerts()` (new-show, on-sale and price-drop alerts, idempotent through `alerts_sent`). Correctness never depends on jobs because expiry is lazy.
 
 ## Simulated external systems
 
 - Email and SMS: `lib/notify.ts` writes to `outbox` and logs to the console; `/dev/outbox` lists the newest 200 and linkifies URLs; it is hidden when `NODE_ENV=production`.
-- In-app notifications (push stand-in): `notifications` rows via `notify()`; no UI yet.
+- In-app notifications (push stand-in): `notifications` rows via `notify()`; read at `/inbox`.
 - Social login: `/auth/mock/[provider]` is a fake consent screen (404 in production). SMS 2FA codes and order texts go to the outbox.
 - Payments: `lib/payments.ts`, behaviour keyed on last4. Card numbers and CVCs exist only in the request that carries them. Refunds are rows in `payments` with kind `refund`.
 - Camera scanning uses `BarcodeDetector` with a paste fallback. No OAuth, wallet, NFC or payouts.
@@ -255,7 +282,7 @@ A parking or hospitality unit is an `order_items` row of kind `addon` plus a `ti
 
 - **Concurrency is tested with real separate connections**: `tests/holds.worker.ts`, `scan.worker.ts` and `resale.worker.ts` run in `worker_threads`, each opening its own connection to the same file. Tests assert no double holds across 8 workers x 200 iterations with all-or-nothing batches, exactly one winner when 8 connections scan the same ticket, and exactly one buyer when two connections buy the same listing.
 - Pure logic with injectable time: pricing math, Luhn and test cards, SafeTix windows, queue admission (fake clock), captcha single-use, rate limiting.
-- Flow tests against a real schema (P9: shared refund caps and partial/void/event refunds, exchange both directions and twice in a row, declined difference, pay in 4 plan and job idempotency, OTP, fraud review gating, protection claims, move seat, comps, social state, account export/delete): payments (idempotency, declines keep the hold, 3DS, expired or foreign hold creates nothing, `one_live_ticket`), order authorization, organizer rules (publish gating, killed rows, doors/on-sale validation), refunds (idempotent, failed refund flagged), reschedule, transfers (old QR dies), resale (ledger credited, own-listing refused, cancel-after-resale reverses credit once), presale and Verified Fan.
+- Flow tests against a real schema (P10: ICS, unsubscribe tokens, alert idempotency through repeated job runs, companion holds, search filters and sorts; P9: shared refund caps and partial/void/event refunds, exchange both directions and twice in a row, declined difference, pay in 4 plan and job idempotency, OTP, fraud review gating, protection claims, move seat, comps, social state, account export/delete): payments (idempotency, declines keep the hold, 3DS, expired or foreign hold creates nothing, `one_live_ticket`), order authorization, organizer rules (publish gating, killed rows, doors/on-sale validation), refunds (idempotent, failed refund flagged), reschedule, transfers (old QR dies), resale (ledger credited, own-listing refused, cancel-after-resale reverses credit once), presale and Verified Fan.
 - Not covered by automated tests: React components, page rendering, route handlers' HTTP layer, the browser-side QR computation.
 
 ## Known limitations and deferrals
@@ -272,7 +299,8 @@ Other known gaps:
 - Add-ons carry no service or facility fee (parking is also untaxed). Offers are not locked at hold time. The seat map shows dynamic prices as of page load. Queue-depth demand (`j`) is the people waiting (joined or polled in the last 2 minutes) divided by 100, a fixed constant.
 - No seller fee, payouts, or per-event transfer/resale rules (P11). Ticket status `expired` and transfer expiry are checked lazily but no job sets them.
 - P9 deferrals (`ponytail:` in code): a failed installment is not retried automatically; an item refund on a pay-in-4 order is capped at what was paid; exchange refuses promo, bundle and installment orders; the 2FA phone number is not verified when 2FA is turned on; wallet payments are simulated (no token); the mock IdP trusts whatever identity is typed (disabled in production).
-- Notifications have no inbox page; email/SMS are outbox-only. Notification preferences are stored (`users.notif_prefs`) but nothing reads them yet (P10).
+- Email/SMS are outbox-only. Preferences apply to pipeline alerts and to the order/transfer/event-change mails that go through `emailUser`; older direct `notify()` calls (claims, fraud review, installments, Verified Fan, resale sold) still write the inbox row unconditionally. Mail to guests has no unsubscribe link.
+- P10: price drops compare base face price only; ICS end time is a fixed 3 hours; the venue map is a schematic SVG, not tiles; organizers cannot yet edit age/bag/set times/notices (seed JSON only); the companion link is adjacency, so a chart where the companion is not beside the accessible seat gets no auto-hold.
 - Single process, single SQLite file; `place()` serializes all writers on the database lock.
 - Dev database is disposable: schema changes require `npm run reset`.
 - Guests are limited only per hold (the per-account limit needs a user id).

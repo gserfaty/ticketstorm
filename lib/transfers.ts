@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { db, tx } from './db.ts'
 import { HoldError } from './inventory.ts'
+import { alertUser, emailUser } from './alerts.ts'
 import { APP_URL, notify, sendEmail, sendSms } from './notify.ts'
 import { assertTradable } from './resale.ts'
 
@@ -36,9 +37,12 @@ export function createTransfer(userId: number, ticketId: number, to: string): nu
     const link = `${APP_URL}/transfers/${id}?token=${token}`
     const who = me.name || me.email
     if (email) {
-      sendEmail(email, `${who} sent you a ticket`, `${who} sent you a ticket on TicketStorm. Log in or sign up to claim it (valid ${DAYS} days):\n${link}`)
-      const u = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: number } | undefined
-      if (u) notify(u.id, 'transfer', `${who} sent you a ticket`, '', `/transfers/${id}?token=${token}`)
+      const text = `${who} sent you a ticket on TicketStorm. Log in or sign up to claim it (valid ${DAYS} days):\n${link}`
+      const u = db.prepare("SELECT id FROM users WHERE email = ? AND status = 'active'").get(email) as { id: number } | undefined
+      if (u) {
+        emailUser(u.id, 'orders', email, `${who} sent you a ticket`, text)
+        alertUser(u.id, 'orders', 'transfer_received', `transfer:${id}`, { title: `${who} sent you a ticket`, link: `/transfers/${id}?token=${token}` }, { email: false })
+      } else sendEmail(email, `${who} sent you a ticket`, text)
     } else sendSms(phone!, `${who} sent you a TicketStorm ticket. Claim it: ${link}`)
     return id
   })
@@ -78,6 +82,7 @@ export function acceptTransfer(userId: number, transferId: number, token: string
       db.prepare('INSERT INTO tickets (order_id, inventory_id, owner_id, secret) VALUES (?,?,?,?)').run(old.order_id, old.inventory_id, userId, randomBytes(32).toString('hex')).lastInsertRowid,
     )
     notify(t.from_user, 'transfer', 'Your ticket transfer was accepted', '', '/tickets')
+    alertUser(userId, 'orders', 'ticket_delivered', `transfer:${transferId}`, { title: 'A transferred ticket is in your account', link: '/tickets' }, { email: false })
     return id
   })
 }

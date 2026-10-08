@@ -9,7 +9,9 @@ export const isFavorite = (userId: number, kind: FavKind, refId: number) =>
 // Flip and return the new state. Only call for a target that exists.
 export function toggleFavorite(userId: number, kind: FavKind, refId: number): boolean {
   if (db.prepare('DELETE FROM favorites WHERE user_id = ? AND kind = ? AND ref_id = ?').run(userId, kind, refId).changes) return false
-  db.prepare('INSERT OR IGNORE INTO favorites (user_id, kind, ref_id) VALUES (?,?,?)').run(userId, kind, refId)
+  // an event favorite remembers today's cheapest price, the baseline for price-drop alerts
+  const price = kind === 'event' ? (db.prepare('SELECT min(price_cents) AS p FROM price_levels WHERE event_id = ? AND event_ids IS NULL').get(refId) as { p: number | null }).p : null
+  db.prepare('INSERT OR IGNORE INTO favorites (user_id, kind, ref_id, last_price) VALUES (?,?,?,?)').run(userId, kind, refId, price)
   return true
 }
 

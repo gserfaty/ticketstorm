@@ -11,6 +11,7 @@ export default async function NewEvent({ params, searchParams }: { params: Promi
   const orgId = Number((await params).orgId)
   await requireOrgRole(orgId, MANAGE_ROLES)
   const venues = db.prepare('SELECT id, name, tz FROM venues WHERE org_id = ? ORDER BY name').all(orgId) as { id: number; name: string; tz: string }[]
+  const artists = db.prepare('SELECT id, name FROM artists ORDER BY name').all() as { id: number; name: string }[]
   return (
     <>
       <h1>New event</h1>
@@ -21,6 +22,7 @@ export default async function NewEvent({ params, searchParams }: { params: Promi
           <input name="title" placeholder="Title" required maxLength={120} />
           <select name="category" aria-label="Category">{CATEGORIES.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}</select>
           <input name="genre" placeholder="Genre (optional)" />
+          <select name="artistId" aria-label="Headliner"><option value="">No headliner</option>{artists.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
           <select name="venueId" aria-label="Venue">{venues.map((v) => <option key={v.id} value={v.id}>{v.name} ({v.tz})</option>)}</select>
           <label>Starts (venue time) <input type="datetime-local" name="startsAt" required /></label>
           <label>Doors (venue time) <input type="datetime-local" name="doorsAt" /></label>

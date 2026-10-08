@@ -17,6 +17,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const isMember = !!user && !!db.prepare('SELECT 1 FROM org_members WHERE user_id = ?').get(user.id)
   const city = (await cookies()).get('city')?.value ?? ''
   const allIn = await allInOn()
+  const unread = user ? (db.prepare('SELECT count(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL').get(user.id) as { n: number }).n : 0
   return (
     <html lang="en">
       <body>
@@ -37,6 +38,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           <form action={toggleAllIn} className="city">
             <button title="Show prices with fees and tax included" aria-pressed={allIn}>{allIn ? 'All-in prices: on' : 'All-in prices: off'}</button>
           </form>
+          {user && <Link href="/inbox" aria-label={`Inbox, ${unread} unread`}>Inbox{unread > 0 && <> <span className="badge on-sale">{unread}</span></>}</Link>}
           <details className="account">
             <summary>{user ? user.name || user.email : 'Account'}</summary>
             <nav>

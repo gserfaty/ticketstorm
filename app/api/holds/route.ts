@@ -6,7 +6,7 @@ import { ensureSession } from '../../../lib/session.ts'
 const posInt = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : undefined)
 const bad = (error: string, status = 400) => NextResponse.json({ error }, { status })
 
-// { eventId, seatIds } | { eventId, bestAvailable: { qty, levelId?, accessible? } } | { eventId, ga: { sectionId, qty } }
+// { eventId, seatIds, companion? } | { eventId, bestAvailable: { qty, levelId?, accessible? } } | { eventId, ga: { sectionId, qty } }
 export async function POST(req: Request) {
   if (!req.headers.get('content-type')?.startsWith('application/json')) return bad('Expected JSON', 415)
   const b = await req.json().catch(() => null)
@@ -25,7 +25,8 @@ export async function POST(req: Request) {
     if (modes[0] === 'seatIds') {
       const ids = b.seatIds
       if (!Array.isArray(ids) || ids.length === 0 || ids.length > 100 || !ids.every((x: unknown) => posInt(x))) return bad('seatIds must be a list of ids')
-      held = holdSeats(eventId, owner, ids)
+      if (b.companion !== undefined && typeof b.companion !== 'boolean') return bad('invalid companion')
+      held = holdSeats(eventId, owner, ids, b.companion ?? true)
     } else if (modes[0] === 'bestAvailable') {
       const { qty, levelId, accessible } = b.bestAvailable ?? {}
       if (!posInt(qty)) return bad('qty required')

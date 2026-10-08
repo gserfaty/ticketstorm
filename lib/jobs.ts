@@ -1,5 +1,6 @@
 import { db, tx } from './db.ts'
 import { promoteWaitlist, releaseEndedWindows, runLottery } from './access.ts'
+import { runAlerts } from './alerts.ts'
 import { chargeDueInstallments } from './installments.ts'
 
 // Idempotent housekeeping. Expiry itself is lazy everywhere; this only tidies up.
@@ -19,6 +20,7 @@ export function runJobs() {
   runLottery()
   promoteWaitlist()
   chargeDueInstallments()
+  runAlerts()
 }
 
 // Called from the root layout: at most once per 30s.

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
   address TEXT,
   notif_prefs TEXT,
   home_city_id INTEGER REFERENCES cities(id),
+  alert_radius_mi INTEGER NOT NULL DEFAULT 100, -- followed-artist/venue alerts only for events this close to home_city_id
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','blocked','deleted')),
   flagged INTEGER NOT NULL DEFAULT 0
 );
@@ -164,6 +165,7 @@ CREATE TABLE IF NOT EXISTS events (
   resale_rule TEXT,
   refund_window_until TEXT,
   popularity INTEGER NOT NULL DEFAULT 0,
+  published_at TEXT, -- set when a draft goes live; alerts for followed artists/venues count from here
   approved INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS events_starts ON events(starts_at);
@@ -260,6 +262,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   link TEXT,
   read_at TEXT
 );
+CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, read_at);
 
 -- Inventory: one row per sellable unit. Reserved seat = 1 row; GA area = 1 row per capacity slot (seat_id NULL).
 -- Expiry is lazy: status='held' AND held_until < now means available again.
@@ -447,7 +450,30 @@ CREATE TABLE IF NOT EXISTS favorites (
   user_id INTEGER NOT NULL REFERENCES users(id),
   kind TEXT NOT NULL CHECK (kind IN ('artist','venue','event')),
   ref_id INTEGER NOT NULL,
+  last_price INTEGER, -- event favorites: cheapest face price (cents) when the price-drop job last looked
   PRIMARY KEY (user_id, kind, ref_id)
+);
+CREATE INDEX IF NOT EXISTS favorites_ref ON favorites(kind, ref_id);
+
+-- One row per alert ever sent: (user, kind, ref) is unique, so a re-run of the alert jobs can never send it twice.
+CREATE TABLE IF NOT EXISTS alerts_sent (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (user_id, kind, ref)
+);
+
+-- ADA / accommodation requests and, in P11, contact-form tickets. messages = JSON [{from, at, text}].
+CREATE TABLE IF NOT EXISTS support_tickets (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  user_id INTEGER REFERENCES users(id),
+  email TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'general',
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','answered','closed')),
+  messages TEXT NOT NULL DEFAULT '[]'
 );
 
 -- Access, queue, bot defense (P7)

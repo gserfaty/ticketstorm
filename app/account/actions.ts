@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { deleteAccount, deleteCard, savePrefs, updateProfile } from '../../lib/account.ts'
+import { deleteAccount, deleteCard, saveAlertArea, savePrefs, updateProfile } from '../../lib/account.ts'
 import { allowed, clientIp } from '../../lib/defense.ts'
 import { UserError } from '../../lib/platform.ts'
 import { logout, requireUser } from '../../lib/session.ts'
@@ -34,6 +34,10 @@ export async function removeCard(f: FormData) {
 
 export async function saveNotifications(f: FormData) {
   await run('notifications', (id) => savePrefs(id, f.getAll('pref').map(String)), 'Preferences saved')
+}
+
+export async function saveAlertAreaAction(f: FormData) {
+  await run('notifications', (id) => saveAlertArea(id, field(f, 'city'), field(f, 'radius')), 'Alert area saved')
 }
 
 // Turn 2FA on or off. Both ask for the password again.

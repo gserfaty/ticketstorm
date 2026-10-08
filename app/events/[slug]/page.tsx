@@ -3,12 +3,13 @@ import { notFound } from 'next/navigation'
 import Flash from '../../../components/Flash.tsx'
 import { openWindowIds } from '../../../lib/access.ts'
 import { db } from '../../../lib/db.ts'
-import { eventState, getEvent, orderLimit } from '../../../lib/events.ts'
+import { eventInfo, eventState, getEvent, orderLimit, otherDates } from '../../../lib/events.ts'
 import { isSoldOut } from '../../../lib/inventory.ts'
 import { displayLevels } from '../../../lib/pricing.ts'
 import { allInOn, getSession, getUser } from '../../../lib/session.ts'
 import { registerVerifiedFan, unlockPresale } from '../../access/actions.ts'
 import Heart from '../../../components/Heart.tsx'
+import ShareButton from '../../../components/ShareButton.tsx'
 import { fmtDateTime, fmtDateTimeTz, money } from '../../../lib/format.ts'
 
 type Win = { id: number; name: string; kind: string; starts_at: string; ends_at: string; requires_code: number; reg_starts: string | null; reg_ends: string | null; lottery_at: string | null }
@@ -28,6 +29,9 @@ export default async function EventPage({ params, searchParams }: { params: Prom
   const addons = db.prepare('SELECT kind, name, price_cents, inventory - sold AS left FROM addons WHERE event_id = ? ORDER BY id').all(e!.id) as { kind: string; name: string; price_cents: number; left: number }[]
   const offers = db.prepare('SELECT name, pct_off FROM offers WHERE event_id = ? AND pct_off > 0 ORDER BY id').all(e!.id) as { name: string; pct_off: number }[]
   const max = orderLimit(e!)
+  const info = eventInfo(e!.info)
+  const others = otherDates(e!)
+  const hasAda = !!db.prepare('SELECT 1 FROM sections s JOIN seats st ON st.section_id = s.id WHERE s.venue_id = ? AND st.accessible = 1 LIMIT 1').get(e!.venue_id)
   // an unlocked presale lets this session shop before the public on-sale
   const presale = !!unlocked.length && s.label === 'Upcoming'
   const notOnSale = e!.status === 'published' || e!.status === 'rescheduled' ? e!.onsale_at && Date.parse(e!.onsale_at) > Date.now() : false
@@ -36,10 +40,17 @@ export default async function EventPage({ params, searchParams }: { params: Prom
       <h1>{e!.title} <span className={`badge ${s.label.toLowerCase().replace(' ', '-')}`}>{s.label}</span> <Heart kind="event" id={e!.id} label={e!.title} /></h1>
       {e!.image && <img src={e!.image} alt="" className="hero-img" />}
       <Flash {...sp} />
+      {info.notices && <p className="card notice-banner" role="alert"><strong>Notice:</strong> {info.notices}</p>}
       <p>{fmtDateTimeTz(e!.starts_at, e!.tz)}</p>
-      {e!.doors_at && <p className="muted">Doors {fmtDateTime(e!.doors_at, e!.tz)}</p>}
+      <p className="row"><a className="btn" href={`/api/events/${e!.id}/ics`}>Add to calendar</a> <ShareButton title={e!.title} path={`/events/${e!.slug}`} /></p>
+      <ul className="plain">
+        {e!.doors_at && <li>Doors: {fmtDateTime(e!.doors_at, e!.tz)}</li>}
+        {info.age && <li>Age: {info.age}</li>}
+        {info.bag && <li>Bag policy: {info.bag}</li>}
+        {!!info.set_times?.length && <li>Set times (venue time): {info.set_times.map((t) => `${t.act} ${t.time}`).join(' · ')}</li>}
+      </ul>
       <p><Link href={`/venues/${e!.venue_slug}`}>{e!.venue}</Link> <Heart kind="venue" id={e!.venue_id} label={e!.venue} /> · {e!.address}, {e!.city}, {e!.state}</p>
-      <div className="muted row">Lineup: {e!.lineup.map((a) => <span key={a.id}>{a.name} <Heart kind="artist" id={a.id} label={a.name} /></span>)}</div>
+      <div className="muted row">Lineup: {e!.lineup.map((a) => <span key={a.id}><Link href={`/artists/${a.slug}`}>{a.name}</Link> <Heart kind="artist" id={a.id} label={a.name} /></span>)}</div>
       {e!.description && <p>{e!.description}</p>}
       {levels.length > 0 && (
         <>
@@ -81,6 +92,7 @@ export default async function EventPage({ params, searchParams }: { params: Prom
           <label>Quantity <select name="qty" defaultValue={Math.min(2, max)} aria-label="Quantity">
             {Array.from({ length: max }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
           </select></label>
+          {hasAda && <label><input type="checkbox" name="accessible" value="1" /> Accessible seating</label>}
           <button>{s.canBuy ? 'Find tickets' : 'Find presale tickets'}</button>
         </form>
       ) : notOnSale ? (
@@ -90,6 +102,13 @@ export default async function EventPage({ params, searchParams }: { params: Prom
       ) : (
         <p className="muted">Tickets are not available for this event.</p>
       )}
+    {others.length > 0 && (
+        <>
+          <h2>Other dates</h2>
+          <ul>{others.map((o) => <li key={o.id}><Link href={`/events/${o.slug}`}>{fmtDateTime(o.starts_at, o.tz)}</Link> · {o.venue}, {o.city}</li>)}</ul>
+        </>
+      )}
+      <p className="muted"><Link href={`/support/ada?event=${e!.slug}`}>Request an accessibility accommodation</Link> (wheelchair space, companion seat, hearing assist, ASL)</p>
     </>
   )
 }

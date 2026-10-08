@@ -2,7 +2,9 @@ import type { Filters as F } from '../lib/events.ts'
 import { CATEGORIES } from '../lib/events.ts'
 import type { City } from '../lib/geo.ts'
 
-export default function Filters({ f, cities }: { f: F; cities: City[] }) {
+const dollars = (c?: number) => (c === undefined ? '' : String(c / 100))
+
+export default function Filters({ f, cities, genres, venues, allIn }: { f: F; cities: City[]; genres: string[]; venues: { slug: string; name: string }[]; allIn: boolean }) {
   return (
     <form action="/search" className="filters">
       <input name="q" type="search" defaultValue={f.q} placeholder="Search" aria-label="Search" />
@@ -28,7 +30,26 @@ export default function Filters({ f, cities }: { f: F; cities: City[] }) {
       <label>From <input name="from" type="date" defaultValue={f.from} /></label>
       <label>To <input name="to" type="date" defaultValue={f.to} /></label>
       <label><input name="accessible" type="checkbox" value="1" defaultChecked={f.accessible} /> Accessible seating</label>
-      {f.genre && <input type="hidden" name="genre" value={f.genre} />}
+      <select name="genre" defaultValue={f.genre ?? ''} aria-label="Genre">
+        <option value="">Any genre</option>
+        {genres.map((g) => <option key={g} value={g}>{g}</option>)}
+      </select>
+      <select name="venue" defaultValue={f.venue ?? ''} aria-label="Venue">
+        <option value="">Any venue</option>
+        {venues.map((v) => <option key={v.slug} value={v.slug}>{v.name}</option>)}
+      </select>
+      <label>Price $ <input name="min" type="number" min="0" step="1" defaultValue={dollars(f.min)} placeholder="min" aria-label="Minimum price" style={{ width: '5rem' }} />
+        – <input name="max" type="number" min="0" step="1" defaultValue={dollars(f.max)} placeholder="max" aria-label="Maximum price" style={{ width: '5rem' }} /></label>
+      <span className="muted">{allIn ? 'incl. fees and tax' : 'before fees and tax'}</span>
+      <label><input name="resale" type="checkbox" value="1" defaultChecked={f.resale} /> Verified resale</label>
+      <label><input name="presale" type="checkbox" value="1" defaultChecked={f.presale} /> Presale</label>
+      <select name="sort" defaultValue={f.sort ?? ''} aria-label="Sort by">
+        <option value="">Sort: best match</option>
+        <option value="date">Date</option>
+        <option value="price">Price (low to high)</option>
+        <option value="distance">Distance</option>
+        <option value="popularity">Popularity</option>
+      </select>
       <button>Search</button>
     </form>
   )

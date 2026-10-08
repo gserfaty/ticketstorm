@@ -73,7 +73,7 @@ export async function createEventAction(f: FormData) {
   const venue = db.prepare('SELECT tz FROM venues WHERE id = ? AND org_id = ?').get(num(f, 'venueId'), orgId) as { tz: string } | undefined
   let id = 0
   try {
-    id = org.createEvent(orgId, eventForm(f, venue?.tz ?? 'UTC'))
+    id = org.createEvent(orgId, eventForm(f, venue?.tz ?? 'UTC'), Number(f.get('artistId')) || undefined)
   } catch (e) {
     if (e instanceof UserError) redirect(`${back}?error=${encodeURIComponent(e.message)}`)
     throw e

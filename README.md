@@ -85,6 +85,16 @@ Enter a code, pick child (50 percent), senior (25) or student (20) per ticket, a
 - **Organizer and admin order tools**: `/organizer/<orgId>/events/<id>/orders` (as `organizer@`): search, resend, refund (full, ticked items with or without fees, void), fraud hold, move seat, comp tickets. `/admin/orders` has the same for admins.
 - **Account**: `/account` has profile, saved cards, notification preferences, security, and privacy (JSON export, delete account).
 
+## Trying the P10 features
+
+- **Search** (`/search`): price range, genre, venue, verified resale, presale, accessible, and sort by best match / date / price / distance / popularity. With the header's all-in toggle on, the range means the all-in price. Try `/search?resale=1`, `/search?presale=1`, `/search?max=60&sort=price`.
+- **Venue and artist pages**: `/venues/empire-arena` (map, chart, parking/transit/bag/accessibility/FAQ sections, upcoming events), `/artists/neon-harbor` (bio, links, tour dates, related artists). Both are linked from cards, event pages and `/favorites`. Heart to follow.
+- **Event page**: `neon-harbor-empire-saturday` has a notice banner, age, bag policy and set times, "Add to calendar" (`/api/events/<id>/ics`, opens in Calendar.app), "Share", and "Other dates".
+- **Alerts** (`fan@` follows Cora Valdez, whose New York show is a draft): log in as `organizer@`, open `Storm Live` > events > "Cora Valdez: Noche de Tormenta" > Publish, then run `npm run jobs` (or just load any page). Log in as `fan@`: the header shows an unread **Inbox** badge and `/dev/outbox` has "New show: ...". Running the jobs again sends nothing. Open the unsubscribe link at the bottom of that email, then publish another Cora Valdez event (new event form has a Headliner field): inbox alert, no email.
+- **Price drop and on-sale reminder**: `fan@` favorited `neon-harbor-empire-saturday`; as organizer lower a level in its pricing page, run the jobs, and `fan@` gets "Price drop". `neon-harbor-empire-onsale-soon` goes on sale 50 minutes after reset; its reminder arrives on the first job run.
+- **Notification settings**: `/account/notifications` (inbox / email / SMS per category, home city and alert radius).
+- **Accessibility**: tick "Accessible seating" on an event page, pick a seat marked with the wheelchair symbol, and the seat beside it (companion) is held with it; untick the companion box to hold only the one seat. `/support/ada` (linked from event and venue pages) files an accessibility request as a support ticket.
+
 ## Test cards
 
 Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Behaviour is chosen by the last four digits. Card numbers and CVCs are never stored or logged; only brand and last4 are kept.
@@ -99,7 +109,7 @@ Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Be
 
 Checkout also asks a math question (single-use captcha) and has a hidden honeypot field.
 
-## Features implemented (P1 to P9)
+## Features implemented (P1 to P10)
 
 - **Accounts**: signup, login, logout, email verification, password reset (links in the dev outbox), scrypt hashing, cookie sessions, lazy guest sessions that survive login, `?next=` redirects.
 - **Discovery**: home (trending, near you), search with category, genre, city + radius, date range and quick "today / weekend / month" filters (venue-local dates), accessible-seating filter, suggest endpoint, category pages, event pages with lineup, venue info, status badges (On sale, Upcoming, Sold out, Cancelled, Postponed, Rescheduled, Ended).
@@ -117,17 +127,19 @@ Checkout also asks a math question (single-use captcha) and has a hidden honeypo
 
 - **Checkout extras and accounts (P9)**: Apple/Google Pay and PayPal mocks, pay in 4, fraud review queue, confirmation email and receipt, mock social login, SMS 2FA, account pages with GDPR export and delete, ticket protection with claims, refund window for rescheduled events, one shared refund function (full, per item, void), organizer and admin order tools (search, resend, refund, hold, move seats, comps), ticket exchange. Details in ARCHITECTURE.md.
 
-Upcoming (see [docs/plan.md](docs/plan.md)): P10 notifications, recommendations, artist and venue pages; P11 transfer/resale rules, payouts, reports, admin ops; P12 nice-to-have sweep.
+- **Discovery, content and notifications (P10)**: price/genre/venue/resale/presale/accessible filters and five sorts, "Recommended for you" rail, event details and calendar file, venue and artist pages, alerts (new show, on-sale reminder, price drop, ticket delivered, transfer received, event changes) through an idempotent job into an inbox, email and SMS per category, signed one-click unsubscribe links, companion-seat auto-hold, ADA request form.
+
+Upcoming (see [docs/plan.md](docs/plan.md)): P11 transfer/resale rules, payouts, reports, admin ops; P12 nice-to-have sweep.
 
 ## Simulated external systems
 
 - **Email and SMS** go to the `outbox` table and `console.log`; read them at `/dev/outbox` (404 when `NODE_ENV=production`). Verify links, reset links, order confirmations, transfer claim links and Verified Fan codes all land there.
-- **Push** is the `notifications` table (rows are written; there is no inbox page yet, planned for P10).
+- **Push** is the `notifications` table, shown at `/inbox`.
 - **Payments** are the fake gateway in `lib/payments.ts`; **payouts** are not implemented (ledger only).
 
 ## Tests
 
-`npm test` runs `node:test` suites in `tests/` (`tests/p9.test.ts` covers refund caps, exchange both ways, installments, OTP, fraud review, protection, comps, social state and account export/delete): auth, discovery helpers, a multi-connection hold race, payments and idempotency, SafeTix windows, organizer/scan/refund flows including concurrent scans, resale and transfers including concurrent buys, queue and bot defense, presales and Verified Fan, pricing (fees, tax, dynamic prices, promos, offers, add-ons, limits) and the orphan-seat rule. They use temporary SQLite files via `TICKETSTORM_DB`.
+`npm test` runs `node:test` suites in `tests/` (`tests/p10.test.ts` covers ICS, unsubscribe tokens, alert idempotency, companion holds, search and recommendations; `tests/p9.test.ts` covers refund caps, exchange both ways, installments, OTP, fraud review, protection, comps, social state and account export/delete): auth, discovery helpers, a multi-connection hold race, payments and idempotency, SafeTix windows, organizer/scan/refund flows including concurrent scans, resale and transfers including concurrent buys, queue and bot defense, presales and Verified Fan, pricing (fees, tax, dynamic prices, promos, offers, add-ons, limits) and the orphan-seat rule. They use temporary SQLite files via `TICKETSTORM_DB`.
 
 ## Docs
 
