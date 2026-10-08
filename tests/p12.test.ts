@@ -231,3 +231,90 @@ test('scalper clusters: 3 accounts on one card or IP flag the accounts; bulk can
   assert.equal(cancelCluster(ev, 'card', 'fp-1').cancelled.length, 0) // nothing left, idempotent
   assert.throws(() => cancelCluster(ev, 'bogus', 'x'))
 })
+
+// ---- checkout extras ----
+const { requestCode, redeemCode, LOOKUP_TTL_MS, MAX_TRIES } = await import('../lib/lookup.ts')
+const { approx, convert, displayCurrency, validCurrency } = await import('../lib/currency.ts')
+const { setProtection, parseOptions, quote, setCheckoutOptions } = await import('../lib/pricing.ts')
+const { addCard, setDefaultCard } = await import('../lib/account.ts')
+const lastCode = () => /is (\d{6})\./.exec(get<{ body: string }>("SELECT body FROM outbox WHERE subject LIKE '%lookup code%' ORDER BY id DESC").body)![1]
+const mails = () => get<{ n: number }>("SELECT count(*) AS n FROM outbox WHERE subject LIKE '%lookup code%'").n
+
+test('guest lookup: mismatches mail nothing, a code works once, expires, and dies after too many wrong guesses', () => {
+  const ev = mkEvent('lookup')
+  const { orderId } = buy(null, ev, { email: 'Guest@X.test' })
+  const m0 = mails()
+  assert.equal(requestCode('other@x.test', orderId), false) // wrong email: nothing mailed
+  assert.equal(requestCode('guest@x.test', orderId + 999), false) // no such order: nothing mailed
+  assert.equal(mails(), m0)
+  const t0 = Date.now()
+  assert.equal(requestCode('guest@x.test', orderId, t0), true) // case-insensitive email
+  assert.equal(mails(), m0 + 1)
+  const code = lastCode()
+  assert.equal(redeemCode('guest@x.test', orderId, code === '000000' ? '111111' : '000000', t0), undefined) // wrong guess
+  const ok = redeemCode('guest@x.test', orderId, code, t0 + 1000)
+  assert.equal(ok?.orderId, orderId)
+  assert.equal(ok?.token, get<{ access_token: string }>('SELECT access_token FROM orders WHERE id = ?', orderId).access_token)
+  assert.equal(redeemCode('guest@x.test', orderId, code, t0 + 2000), undefined) // single use
+  // expiry
+  requestCode('guest@x.test', orderId, t0)
+  const c2 = lastCode()
+  assert.equal(redeemCode('guest@x.test', orderId, c2, t0 + LOOKUP_TTL_MS + 1), undefined)
+  // a new request kills the older code; wrong guesses lock the code
+  requestCode('guest@x.test', orderId, t0)
+  const c3 = lastCode()
+  requestCode('guest@x.test', orderId, t0)
+  const c4 = lastCode()
+  if (c3 !== c4) assert.equal(redeemCode('guest@x.test', orderId, c3, t0), undefined)
+  for (let i = 0; i < MAX_TRIES; i++) redeemCode('guest@x.test', orderId, c4 === '123456' ? '654321' : '123456', t0)
+  assert.equal(redeemCode('guest@x.test', orderId, c4, t0), undefined) // locked even with the right code
+  // an account order gets no token (log in instead)
+  const owner = user('lookup-owner')
+  const acct = buy(owner, ev, { email: 'lookup-owner@x.test' }).orderId
+  requestCode('lookup-owner@x.test', acct, t0)
+  assert.equal(redeemCode('lookup-owner@x.test', acct, lastCode(), t0)?.token, null)
+  // the stored value is a keyed hash, not the code
+  assert.ok(!db.prepare('SELECT code_hash FROM lookup_codes').all().some((r) => (r as { code_hash: string }).code_hash === c4))
+})
+
+test('display currency is a fixed-rate approximation; unknown codes fall back to USD', () => {
+  assert.equal(validCurrency('XXX'), 'USD')
+  assert.equal(validCurrency('__proto__'), 'USD')
+  assert.equal(approx(10000, 'USD'), '')
+  assert.equal(convert(10000, 'CAD'), 136)
+  assert.match(approx(10000, 'CAD'), /^≈ \$?CA?\$?136\.00$|^≈ .*136\.00$/)
+  assert.equal(displayCurrency(undefined, 'CA'), 'CAD')
+  assert.equal(displayCurrency('EUR', 'CA'), 'EUR')
+  assert.equal(displayCurrency(undefined, 'US'), 'USD')
+})
+
+test('protection step stores a yes or no without touching other options; declined stays answered', () => {
+  const ev = mkEvent('protect')
+  const h = inv.holdBestAvailable(ev, { sessionToken: 'prot', userId: null }, 2)
+  assert.equal(parseOptions(get<{ options: string | null }>('SELECT options FROM holds WHERE id = ?', h.holdId).options).protection, undefined)
+  const base = quote(h.holdId).total
+  setProtection(h.holdId, 'prot', true)
+  assert.ok(quote(h.holdId).protection > 0)
+  assert.equal(quote(h.holdId).total, base + quote(h.holdId).protection)
+  setProtection(h.holdId, 'prot', false)
+  assert.equal(parseOptions(get<{ options: string | null }>('SELECT options FROM holds WHERE id = ?', h.holdId).options).protection, false)
+  assert.equal(quote(h.holdId).total, base)
+  assert.throws(() => setProtection(h.holdId, 'someone-else', true), /expired/)
+  // the options form keeps "no" as an answer too
+  setCheckoutOptions(h.holdId, 'prot', { promo: '', offers: {}, addons: {}, protection: false })
+  assert.equal(parseOptions(get<{ options: string | null }>('SELECT options FROM holds WHERE id = ?', h.holdId).options).protection, false)
+})
+
+test('wallet: cards are validated, fingerprinted, capped; one default', () => {
+  const u = user('wallet')
+  assert.throws(() => addCard(u, { number: '4242424242424241', exp: '12/39', cvc: '123' }, false), /invalid/)
+  addCard(u, { number: '4242424242424242', exp: '12/39', cvc: '123' }, false)
+  addCard(u, { number: '5555555555554444', exp: '11/39', cvc: '123' }, true)
+  assert.throws(() => addCard(u, { number: '4242424242424242', exp: '12/39', cvc: '123' }, false), /already/)
+  const cards = db.prepare('SELECT id, last4, is_default, fp FROM saved_cards WHERE user_id = ? ORDER BY id').all(u) as { id: number; last4: string; is_default: number; fp: string }[]
+  assert.deepEqual(cards.map((c) => c.is_default), [0, 1])
+  assert.ok(cards.every((c) => c.fp.length === 32 && !c.fp.includes(c.last4 + '0000')))
+  setDefaultCard(u, cards[0].id)
+  assert.deepEqual((db.prepare('SELECT is_default FROM saved_cards WHERE user_id = ? ORDER BY id').all(u) as { is_default: number }[]).map((c) => c.is_default), [1, 0])
+  assert.throws(() => setDefaultCard(user('wallet-other'), cards[0].id), /not found/)
+})

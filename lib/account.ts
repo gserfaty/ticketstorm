@@ -1,6 +1,8 @@
 import { db, tx } from './db.ts'
 import { verifyPassword } from './auth.ts'
 import { UserError } from './platform.ts'
+import { brandOf, validateCard } from './payments.ts'
+import { mac } from './defense.ts'
 
 const digits = (s: string) => s.replace(/\D/g, '')
 
@@ -24,6 +26,36 @@ export function updateProfile(userId: number, f: { name: string; phone: string; 
 // Saved cards belong to one user; the id alone is never enough.
 export function deleteCard(userId: number, cardId: number) {
   if (db.prepare('DELETE FROM saved_cards WHERE id = ? AND user_id = ?').run(cardId, userId).changes !== 1) throw new UserError('Card not found')
+}
+
+// ---- card wallet: brand, last four and expiry only. The number is validated, fingerprinted (keyed hash) and dropped. ----
+export const MAX_CARDS = 5
+export function addCard(userId: number, c: { number: string; exp: string; cvc: string }, makeDefault: boolean) {
+  const err = validateCard(c)
+  if (err) throw new UserError(err)
+  if ((db.prepare('SELECT count(*) AS n FROM saved_cards WHERE user_id = ?').get(userId) as { n: number }).n >= MAX_CARDS) throw new UserError(`You can keep up to ${MAX_CARDS} cards`)
+  const last4 = c.number.slice(-4)
+  const brand = brandOf(c.number)
+  tx(() => {
+    const r = db.prepare('INSERT OR IGNORE INTO saved_cards (user_id, brand, last4, exp, fake_token, fp) VALUES (?,?,?,?,?,?)').run(userId, brand, last4, c.exp, 'tok_' + mac(`tok:${userId}:${c.number}`).toString('hex').slice(0, 24), mac(`card:${c.number}`).toString('hex').slice(0, 32))
+    if (r.changes !== 1) throw new UserError('That card is already in your wallet')
+    if (makeDefault || !db.prepare('SELECT 1 FROM saved_cards WHERE user_id = ? AND is_default = 1').get(userId)) setDefaultCard(userId, Number(r.lastInsertRowid))
+  })
+}
+
+// One default per user (express checkout preselects it).
+export function setDefaultCard(userId: number, cardId: number) {
+  if (!db.prepare('SELECT 1 FROM saved_cards WHERE id = ? AND user_id = ?').get(cardId, userId)) throw new UserError('Card not found')
+  db.prepare('UPDATE saved_cards SET is_default = (id = ?) WHERE user_id = ?').run(cardId, userId)
+}
+
+// ---- linked ticket vendors: a SIMULATION. Linking records the choice; nothing is imported, nothing is sent anywhere. ----
+export const VENDORS: [string, string][] = [['tixhub', 'TixHub'], ['gigpass', 'GigPass'], ['boxofficenow', 'BoxOfficeNow']]
+export const linkedVendors = (userId: number) => (db.prepare('SELECT vendor FROM vendor_links WHERE user_id = ?').all(userId) as { vendor: string }[]).map((r) => r.vendor)
+export function setVendorLink(userId: number, vendor: string, on: boolean) {
+  if (!VENDORS.some(([k]) => k === vendor)) throw new UserError('Unknown vendor')
+  if (on) db.prepare('INSERT OR IGNORE INTO vendor_links (user_id, vendor) VALUES (?,?)').run(userId, vendor)
+  else db.prepare('DELETE FROM vendor_links WHERE user_id = ? AND vendor = ?').run(userId, vendor)
 }
 
 // Optional messages only. Order, ticket, transfer and event-change messages are essential: always sent, no preference, no unsubscribe.
@@ -71,6 +103,8 @@ export function exportData(userId: number): Row {
     listings: all('SELECT id, ticket_id, price_cents, status, created_at FROM listings WHERE seller_id = ?', userId),
     favorites: all('SELECT kind, ref_id, created_at FROM favorites WHERE user_id = ?', userId),
     notifications: all('SELECT kind, title, body, link, read_at, created_at FROM notifications WHERE user_id = ?', userId),
+    linked_vendors: all('SELECT vendor, created_at FROM vendor_links WHERE user_id = ?', userId),
+    price_alerts: all('SELECT event_id, target_cents, created_at FROM price_alerts WHERE user_id = ?', userId),
     linked_logins: all('SELECT provider, created_at FROM oauth_links WHERE user_id = ?', userId),
     ledger: all('SELECT kind, amount, ref, created_at FROM ledger WHERE account = ?', `user:${userId}`),
   }
@@ -94,6 +128,6 @@ export function deleteAccount(userId: number, confirm: string) {
     db.prepare("UPDATE users SET email = ?, name = '', phone = NULL, address = NULL, notif_prefs = NULL, password_hash = NULL, twofa_enabled = 0, home_city_id = NULL, status = 'deleted' WHERE id = ?").run(gone, userId)
     db.prepare('UPDATE orders SET email = ? WHERE user_id = ?').run(gone, userId)
     db.prepare('UPDATE payments SET meta = NULL WHERE order_id IN (SELECT id FROM orders WHERE user_id = ?)').run(userId)
-    for (const t of ['sessions', 'saved_cards', 'oauth_links', 'favorites', 'notifications', 'codes']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(userId)
+    for (const t of ['sessions', 'saved_cards', 'oauth_links', 'favorites', 'notifications', 'codes', 'vendor_links', 'price_alerts']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(userId)
   })
 }

@@ -7,12 +7,14 @@ import { listSavedCards } from '../../../lib/payments.ts'
 import { parseOptions, protectionPct, quote } from '../../../lib/pricing.ts'
 import { plan } from '../../../lib/installments.ts'
 import { money, fmtDateTimeTz } from '../../../lib/format.ts'
-import { getSession, getUser } from '../../../lib/session.ts'
+import { currencyPref, getSession, getUser } from '../../../lib/session.ts'
+import { approx, displayCurrency } from '../../../lib/currency.ts'
 import { addressOf } from '../../../lib/account.ts'
 import { DELIVERY_LABEL } from '../../../lib/rules.ts'
 import type { Delivery } from '../../../lib/rules.ts'
 import PayForm from '../../../components/PayForm.tsx'
 import { applyOptions, pay } from '../actions.ts'
+import { redirect } from 'next/navigation'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,9 +32,10 @@ export default async function Checkout({ params, searchParams }: { params: Promi
       </>
     )
   }
-  const ev = db.prepare('SELECT e.title, e.slug, e.starts_at, v.name AS venue, v.tz FROM events e JOIN venues v ON v.id = e.venue_id WHERE e.id = ?').get(hold.event_id) as {
-    title: string; slug: string; starts_at: string; venue: string; tz: string
+  const ev = db.prepare('SELECT e.title, e.slug, e.starts_at, v.name AS venue, v.tz, c.country FROM events e JOIN venues v ON v.id = e.venue_id JOIN cities c ON c.id = v.city_id WHERE e.id = ?').get(hold.event_id) as {
+    title: string; slug: string; starts_at: string; venue: string; tz: string; country: string
   }
+  const cur = displayCurrency(await currencyPref(), ev.country)
   const q = quote(hold.id)
   const resale = q.lines.some((l) => l.listingId)
   const offers = resale ? [] : (db.prepare('SELECT id, name, pct_off FROM offers WHERE event_id = ? AND pct_off > 0 ORDER BY pct_off').all(hold.event_id) as { id: number; name: string; pct_off: number }[])
@@ -50,10 +53,12 @@ export default async function Checkout({ params, searchParams }: { params: Promi
   const limited = db
     .prepare('SELECT s.name AS section, st.row, st.number FROM inventory i JOIN seats st ON st.id = i.seat_id JOIN sections s ON s.id = i.section_id WHERE i.hold_id = ? AND st.obstructed = 1 ORDER BY i.id')
     .all(hold.id) as { section: string; row: string; number: number }[]
+  if (!resale && premium > 0 && opts.protection === undefined && !error && !notice) redirect(`/checkout/${hold.id}/protection`)
   const parts = user ? plan(q.total, ev.starts_at) : null // pay in 4 is for accounts only
   return (
     <>
       <h1>Checkout</h1>
+      {cur !== 'USD' && <p className="muted">Your card is charged in USD ({money(q.total)}). {cur} amounts use a fixed demo rate and are approximate.</p>}
       <div className="card">
         <strong>{ev.title}</strong>
         <div className="muted">{ev.venue} · {fmtDateTimeTz(ev.starts_at, ev.tz)}</div>
@@ -68,10 +73,11 @@ export default async function Checkout({ params, searchParams }: { params: Promi
             <tr><td>Tickets{q.addons.length ? ' and add-ons' : ''}</td><td>{money(q.subtotal)}</td></tr>
             <tr><td>Service and facility fees</td><td>{money(q.fees - q.orderFee)}</td></tr>
             <tr><td>Order processing and delivery</td><td>{money(q.orderFee)}</td></tr>
-            <tr><td>Tax</td><td>{money(q.tax)}</td></tr>
+            <tr><td>{ev.country === 'US' ? 'Tax' : 'Local tax (VAT/GST/HST, international)'}</td><td>{money(q.tax)}</td></tr>
             {q.discount > 0 && <tr><td>Promo {q.promo?.code}</td><td>-{money(q.discount)}</td></tr>}
             {q.protection > 0 && <tr><td>Ticket protection (not taxed)</td><td>{money(q.protection)}</td></tr>}
             <tr><td><strong>Total</strong></td><td><strong>{money(q.total)}</strong></td></tr>
+            {cur !== 'USD' && <tr><td className="muted">In {cur} (approximate)</td><td className="muted">{approx(q.total, cur)}</td></tr>}
           </tbody>
         </table>
       </div>

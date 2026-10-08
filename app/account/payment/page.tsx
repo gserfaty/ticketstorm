@@ -1,27 +1,45 @@
+import Link from 'next/link'
 import AccountNav from '../../../components/AccountNav.tsx'
 import Flash from '../../../components/Flash.tsx'
+import { addressOf, MAX_CARDS } from '../../../lib/account.ts'
+import { db } from '../../../lib/db.ts'
 import { listSavedCards } from '../../../lib/payments.ts'
 import { requireUser } from '../../../lib/session.ts'
-import { removeCard } from '../actions.ts'
+import { addWalletCard, makeDefaultCard, removeCard } from '../actions.ts'
 
 export const dynamic = 'force-dynamic'
 
-export default async function Payment({ searchParams }: { searchParams: Promise<{ error?: string; notice?: string }> }) {
+export default async function Wallet({ searchParams }: { searchParams: Promise<{ error?: string; notice?: string }> }) {
   const user = await requireUser()
   const cards = listSavedCards(user.id)
+  const addr = addressOf((db.prepare('SELECT address FROM users WHERE id = ?').get(user.id) as { address: string | null }).address)
+  const express = cards.length > 0 && !!addr.line1 && !!addr.city && !!addr.zip
   return (
     <>
       <h1>Account</h1>
       <AccountNav here="payment" />
       <Flash {...(await searchParams)} />
-      <p className="muted">Cards are saved from checkout ("Save this card"). Only the brand, last four digits and expiry are kept.</p>
+      <p className="muted">Your wallet keeps only the brand, last four digits and expiry. The card number and CVC are checked and then forgotten. Express checkout fills in your default card and your saved address; you still re-enter the CVC.</p>
+      <p className={express ? 'notice' : 'muted'}>{express ? 'Express checkout is ready.' : <>Express checkout needs a card here and an address in your <Link href="/account/profile">profile</Link>.</>}</p>
       {cards.map((c) => (
-        <div className="card buy" key={c.id}>
-          {c.brand} ending {c.last4} · expires {c.exp}
+        <div className="card row" key={c.id}>
+          {c.brand} ending {c.last4} · expires {c.exp} {c.is_default ? <span className="badge on-sale">default</span> : null}
+          {!c.is_default && <form action={makeDefaultCard}><input type="hidden" name="cardId" value={c.id} /><button>Make default</button></form>}
           <form action={removeCard}><input type="hidden" name="cardId" value={c.id} /><button>Delete</button></form>
         </div>
       ))}
       {!cards.length && <p>No saved cards.</p>}
+      {cards.length < MAX_CARDS && (
+        <form action={addWalletCard} className="stack">
+          <h2>Add a card</h2>
+          <input name="number" placeholder="Card number" inputMode="numeric" autoComplete="cc-number" required />
+          <input name="exp" placeholder="MM/YY" autoComplete="cc-exp" required />
+          <input name="cvc" placeholder="CVC (checked, not stored)" inputMode="numeric" autoComplete="cc-csc" required />
+          <label><input type="checkbox" name="default" /> Make it my default card</label>
+          <button>Add card</button>
+          <span className="muted">Test card: 4242 4242 4242 4242.</span>
+        </form>
+      )}
     </>
   )
 }

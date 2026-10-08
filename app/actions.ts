@@ -11,6 +11,7 @@ import { hashPassword, randomToken, verifyPassword } from '../lib/auth.ts'
 import { sendEmail, APP_URL } from '../lib/notify.ts'
 import { nearestCity } from '../lib/geo.ts'
 import { ensureSession, login } from '../lib/session.ts'
+import { validCurrency } from '../lib/currency.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 const fail = (path: string, msg: string): never => redirect(`${path}${path.includes('?') ? '&' : '?'}error=${encodeURIComponent(msg)}`)
@@ -189,4 +190,12 @@ export async function setCityByCoords(lat: number, lng: number) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return
   const c = nearestCity(lat, lng)
   if (c) (await cookies()).set('city', String(c.id), { path: '/', maxAge: 365 * 86_400 })
+}
+
+// Display currency (cookie). Only changes how prices are shown, never what is charged.
+export async function setCurrency(f: FormData) {
+  ;(await cookies()).set('currency', validCurrency(field(f, 'currency')), { path: '/', sameSite: 'lax', maxAge: 365 * 86_400 })
+  const ref = (await headers()).get('referer')
+  const host = (await headers()).get('host')
+  redirect(ref && host && new URL(ref).host === host ? new URL(ref).pathname + new URL(ref).search : '/')
 }

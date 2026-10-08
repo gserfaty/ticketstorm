@@ -5,9 +5,10 @@ import './globals.css'
 import { listCities } from '../lib/geo.ts'
 import { runJobsThrottled } from '../lib/jobs.ts'
 import { db } from '../lib/db.ts'
-import { allInOn, getSession, getUser } from '../lib/session.ts'
+import { allInOn, currencyPref, getSession, getUser } from '../lib/session.ts'
+import { CURRENCIES, validCurrency } from '../lib/currency.ts'
 import SearchBox from '../components/SearchBox.tsx'
-import { setCity, toggleAllIn } from './actions.ts'
+import { setCity, setCurrency, toggleAllIn } from './actions.ts'
 import { stopViewingAs } from './impersonate/actions.ts'
 
 export const metadata = { title: 'TicketStorm', description: 'Live events, tickets in a flash' }
@@ -18,6 +19,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const isMember = !!user && !!db.prepare('SELECT 1 FROM org_members WHERE user_id = ?').get(user.id)
   const city = (await cookies()).get('city')?.value ?? ''
   const allIn = await allInOn()
+  const cur = validCurrency(await currencyPref())
   const unread = user ? (db.prepare('SELECT count(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL').get(user.id) as { n: number }).n : 0
   const imp = user && (await getSession())?.impersonator_id ? (db.prepare('SELECT email FROM users WHERE id = ?').get((await getSession())!.impersonator_id!) as { email: string }) : undefined
   return (
@@ -46,6 +48,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           <form action={toggleAllIn} className="city">
             <button title="Show prices with fees and tax included" aria-pressed={allIn}>{allIn ? 'All-in prices: on' : 'All-in prices: off'}</button>
           </form>
+          <form action={setCurrency} className="city" title="Display only: approximate conversions. You are always charged in USD.">
+            <select name="currency" defaultValue={cur} aria-label="Display currency">{CURRENCIES.map((c) => <option key={c}>{c}</option>)}</select>
+            <button>Show</button>
+          </form>
           <Link href="/discover">Discover</Link>
           <Link href="/map">Map</Link>
           {user && <Link href="/inbox" aria-label={`Inbox, ${unread} unread`}>Inbox{unread > 0 && <> <span className="badge on-sale">{unread}</span></>}</Link>}
@@ -72,6 +78,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <Link href="/signup">Sign up</Link>
                 </>
               )}
+              <Link href="/lookup">Find a guest order</Link>
               <Link href="/help">Help</Link>
               {process.env.NODE_ENV !== 'production' && <Link href="/dev/outbox">Dev outbox</Link>}
             </nav>

@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { deleteAccount, deleteCard, saveAlertArea, savePrefs, updateProfile } from '../../lib/account.ts'
+import { addCard, deleteAccount, deleteCard, saveAlertArea, savePrefs, setDefaultCard, setVendorLink, updateProfile } from '../../lib/account.ts'
 import { allowed, clientIp } from '../../lib/defense.ts'
 import { UserError } from '../../lib/platform.ts'
 import { requestPayout } from '../../lib/payouts.ts'
@@ -31,6 +31,21 @@ export async function saveProfile(f: FormData) {
 
 export async function removeCard(f: FormData) {
   await run('payment', (id) => deleteCard(id, Number(field(f, 'cardId'))), 'Card removed')
+}
+
+// Wallet: the card number is read here, validated and fingerprinted by lib/account.ts addCard, and goes no further. Only brand, last four and expiry are kept.
+export async function addWalletCard(f: FormData) {
+  await run('payment', (id) => addCard(id, { number: field(f, 'number').replace(/[\s-]/g, ''), exp: field(f, 'exp'), cvc: field(f, 'cvc') }, f.get('default') === 'on'), 'Card added')
+}
+
+export async function makeDefaultCard(f: FormData) {
+  await run('payment', (id) => setDefaultCard(id, Number(field(f, 'cardId'))), 'Default card updated')
+}
+
+// Simulated vendor linking: records the choice only.
+export async function toggleVendor(f: FormData) {
+  const on = field(f, 'on') === '1'
+  await run('linked', (id) => setVendorLink(id, field(f, 'vendor'), on), on ? 'Linked (simulation: nothing was imported)' : 'Unlinked')
 }
 
 export async function saveNotifications(f: FormData) {

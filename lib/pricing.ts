@@ -194,7 +194,7 @@ export function setCheckoutOptions(holdId: number, sessionToken: string, input: 
     if (qty > a.left) throw new UserError(a.left ? `Only ${a.left} left: ${a.name}` : `${a.name} is sold out`)
     ;(out.addons ??= {})[id] = qty
   }
-  if (input.protection) out.protection = true
+  if (input.protection !== undefined) out.protection = input.protection // false = "no thanks" was answered: the protection step is not shown again
   db.prepare('UPDATE holds SET options = ? WHERE id = ?').run(JSON.stringify(out), holdId)
 }
 
@@ -274,4 +274,12 @@ export function quote(holdId: number): Quote {
     ...(promo ? { promo: { id: promo.id, code: promo.code } } : {}),
     ...(promoError ? { promoError } : {}),
   }
+}
+
+// The dedicated protection step: yes or no, stored on the hold with the other options (which are kept).
+export function setProtection(holdId: number, sessionToken: string, on: boolean) {
+  const h = db.prepare("SELECT options FROM holds WHERE id = ? AND session_token = ? AND status = 'active' AND expires_at > ?").get(holdId, sessionToken, new Date().toISOString()) as { options: string | null } | undefined
+  if (!h) throw new UserError('Your hold expired')
+  if (db.prepare("SELECT 1 FROM listings WHERE hold_id = ? AND status = 'active'").get(holdId)) throw new UserError('Ticket protection does not apply to resale tickets')
+  db.prepare('UPDATE holds SET options = ? WHERE id = ?').run(JSON.stringify({ ...parseOptions(h.options), protection: on }), holdId)
 }

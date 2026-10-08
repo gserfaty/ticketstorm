@@ -8,7 +8,8 @@ import { isSoldOut } from '../../../lib/inventory.ts'
 import { displayLevels } from '../../../lib/pricing.ts'
 import { getPriceAlert } from '../../../lib/pricealerts.ts'
 import { priceAlert } from '../../alerts/actions.ts'
-import { allInOn, getSession, getUser } from '../../../lib/session.ts'
+import { approx, displayCurrency } from '../../../lib/currency.ts'
+import { allInOn, currencyPref, getSession, getUser } from '../../../lib/session.ts'
 import { registerVerifiedFan, unlockPresale } from '../../access/actions.ts'
 import Heart from '../../../components/Heart.tsx'
 import ShareButton from '../../../components/ShareButton.tsx'
@@ -45,6 +46,7 @@ export default async function EventPage({ params, searchParams }: { params: Prom
   const max = orderLimit(e!)
   const info = eventInfo(e!.info)
   const others = otherDates(e!)
+  const cur = displayCurrency(await currencyPref(), e!.country)
   const alert = user ? getPriceAlert(user.id, e!.id) : undefined
   const related = relatedEvents(e!)
   const viewers = viewingNow(e!.id)
@@ -73,9 +75,10 @@ export default async function EventPage({ params, searchParams }: { params: Prom
       {e!.description && <p>{e!.description}</p>}
       {levels.length > 0 && (
         <>
-          <h2>Tickets {levels.length > 1 && <span className="muted">{money(levels[0].cents)} – {money(levels[levels.length - 1].cents)}</span>}</h2>
-          <p className="muted">{allIn ? 'Prices include fees and tax (plus a per-order fee at checkout).' : 'Prices before fees and tax.'} Limit {max} per order, {e!.ticket_limit} per account.</p>
-          <ul>{levels.map((l) => <li key={l.id}>{l.name} ({l.ticket_type}) · {money(l.cents)}{l.perks && <div className="muted">Includes: {l.perks}</div>}</li>)}</ul>
+          <h2>Tickets {levels.length > 1 && <span className="muted">{money(levels[0].cents)} – {money(levels[levels.length - 1].cents)} {approx(levels[0].cents, cur)}{cur !== 'USD' ? ` – ${approx(levels[levels.length - 1].cents, cur).replace('≈ ', '')}` : ''}</span>}</h2>
+          <p className="muted">{allIn ? 'Prices include fees and tax (plus a per-order fee at checkout).' : 'Prices before fees and tax.'} Limit {max} per order, {e!.ticket_limit} per account.{cur !== 'USD' && <> Amounts in {cur} are approximate (fixed demo rate, display only); you are always charged in USD.</>}</p>
+          {e!.country !== 'US' && <p className="notice-banner card"><strong>International event ({e!.city}, {e!.country}).</strong> Tax at checkout is the local rate for this city (VAT/GST/HST, {(db.prepare('SELECT tax_rate_bps AS b FROM cities WHERE name = ?').get(e!.city) as { b: number }).b / 100}%).</p>}
+          <ul>{levels.map((l) => <li key={l.id}>{l.name} ({l.ticket_type}) · {money(l.cents)} <span className="muted">{approx(l.cents, cur)}</span>{l.perks && <div className="muted">Includes: {l.perks}</div>}</li>)}</ul>
         </>
       )}
       <p className="row">

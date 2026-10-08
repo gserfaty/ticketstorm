@@ -150,3 +150,9 @@ export async function logout(auditStop = true) {
   if (token) db.prepare('DELETE FROM sessions WHERE token = ?').run(token)
   ;(await cookies()).delete(COOKIE)
 }
+
+// Display currency chosen in the header (cookie); 'USD' unless a supported code is set. Display only.
+export async function currencyPref(): Promise<string> {
+  const c = (await cookies()).get('currency')?.value
+  return c && /^[A-Z]{3}$/.test(c) ? c : 'USD'
+}

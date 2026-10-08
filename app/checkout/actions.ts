@@ -7,7 +7,7 @@ import { allowed, checkCaptcha, clientIp, isBlocked, mac, newCaptcha } from '../
 import type { Captcha } from '../../lib/defense.ts'
 import { HoldError } from '../../lib/inventory.ts'
 import { UserError } from '../../lib/platform.ts'
-import { setCheckoutOptions } from '../../lib/pricing.ts'
+import { setCheckoutOptions, setProtection } from '../../lib/pricing.ts'
 import { approve3ds, fail3ds, finalize } from '../../lib/orders.ts'
 import { brandOf, validateCard } from '../../lib/payments.ts'
 import type { Method } from '../../lib/payments.ts'
@@ -135,4 +135,18 @@ export async function threeDs(f: FormData) {
     back(h!.hold_id, e.message)
   }
   redirect('/')
+}
+
+// The protection step: stores yes or no on the hold (other options are kept) and returns to checkout.
+export async function chooseProtection(f: FormData) {
+  const session = await getSession()
+  const holdId = Number(field(f, 'holdId'))
+  if (!session || !Number.isInteger(holdId) || holdId < 1) redirect('/')
+  try {
+    setProtection(holdId, session!.token, f.get('choice') === 'yes')
+  } catch (e) {
+    if (e instanceof UserError) back(holdId, e.message)
+    throw e
+  }
+  redirect(`/checkout/${holdId}`)
 }
