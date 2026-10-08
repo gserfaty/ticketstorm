@@ -16,17 +16,18 @@ export type Held = { holdId: number; expiresAt: string; ids: number[] }
 
 const marks = (n: number) => Array(n).fill('?').join(',')
 // Public inventory plus the presale windows this session has unlocked (and that are open now).
-const visible = (col: string, n: number) => `(${col} IS NULL OR ${col} IN (${marks(n)}))`
+// `pub` false = the session may only use its unlocked windows (not admitted yet, or the public sale has not started).
+const visible = (col: string, n: number, pub = true) => (pub ? `(${col} IS NULL OR ${col} IN (${marks(n)}))` : `${col} IN (${marks(n)})`)
 
 // ticket_limit is per ACCOUNT: tickets in the user's paid orders for the event + live holds from their other sessions + `qty`.
 // (This session's own hold is being replaced, so it is not counted.) Guests are limited by the per-hold qty check only.
-export function assertTicketLimit(userId: number | null, eventId: number, qty: number, sessionToken: string) {
-  if (!userId) return
+export function assertTicketLimit(userId: number | null, eventId: number, qty: number, sessionToken: string, email?: string) {
+  if (!userId && !email) return
   const limit = (db.prepare('SELECT ticket_limit FROM events WHERE id = ?').get(eventId) as { ticket_limit: number }).ticket_limit
   const paid = (db
-    .prepare("SELECT count(*) AS n FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE o.user_id = ? AND o.event_id = ? AND o.status IN ('paid','review','partially_refunded') AND oi.kind = 'ticket'")
-    .get(userId, eventId) as { n: number }).n
-  const held = (db
+    .prepare("SELECT count(*) AS n FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE (o.user_id = ? OR lower(o.email) = lower(?)) AND o.event_id = ? AND o.status IN ('paid','review','partially_refunded') AND oi.kind = 'ticket'")
+    .get(userId, email ?? '', eventId) as { n: number }).n
+  const held = !userId ? 0 : (db
     .prepare("SELECT count(*) AS n FROM inventory i JOIN holds h ON h.id = i.hold_id WHERE h.user_id = ? AND h.event_id = ? AND h.status = 'active' AND h.expires_at > ? AND h.session_token != ? AND i.status = 'held'")
     .get(userId, eventId, new Date().toISOString(), sessionToken) as { n: number }).n
   if (paid + held + qty > limit) throw new HoldError(`Limit ${limit} tickets per account for this event (you already have ${paid + held})`, 409)
@@ -65,14 +66,21 @@ export function free(holdId: number) {
 
 // Every hold path ends here: ONE conditional UPDATE inside BEGIN IMMEDIATE, expiry folded into the predicate,
 // all-or-nothing (changes !== ids.length -> throw -> ROLLBACK). `pick` chooses candidate ids inside the same tx.
-function place(eventId: number, owner: Owner, qty: number, pick: (win: number[]) => number[]): Held {
+function place(eventId: number, owner: Owner, qty: number, pick: (win: number[], pub: boolean) => number[]): Held {
   return tx(() => {
     const ev = db.prepare('SELECT id, status, starts_at, onsale_at, hold_minutes, ticket_limit FROM events WHERE id = ? AND approved = 1').get(eventId) as
       | { id: number; status: string; starts_at: string; onsale_at: string | null; hold_minutes: number; ticket_limit: number }
       | undefined
     if (!ev || ev.status === 'draft') throw new HoldError('Event not found', 404)
-    if (!admittedNow(eventId, owner.sessionToken, Date.now())) throw new HoldError('Join the waiting room to buy tickets for this event', 403)
-    if (!eventState(ev).canBuy) throw new HoldError('Tickets are not on sale for this event', 409)
+    // Public seats need the waiting room (if any) and an open sale. A session with an unlocked presale window can still buy that window's
+    // seats without queue admission, and before the public on-sale.
+    const st = eventState(ev)
+    const admitted = admittedNow(eventId, owner.sessionToken, Date.now())
+    const win = openWindowIds(eventId, owner.sessionToken)
+    const pub = admitted && st.canBuy
+    if (!pub && !(win.length && (st.canBuy || st.label === 'Upcoming'))) {
+      throw admitted ? new HoldError('Tickets are not on sale for this event', 409) : new HoldError('Join the waiting room to buy tickets for this event', 403)
+    }
     if (!Number.isInteger(qty) || qty < 1 || qty > ev.ticket_limit) throw new HoldError(`Choose 1 to ${ev.ticket_limit} tickets`, 400)
 
     const now = new Date()
@@ -81,8 +89,7 @@ function place(eventId: number, owner: Owner, qty: number, pick: (win: number[])
     // One live hold per session per event: a new hold replaces the old one, so ticket_limit can't be dodged by stacking holds.
     for (const h of db.prepare("SELECT id FROM holds WHERE session_token = ? AND event_id = ? AND status = 'active'").all(owner.sessionToken, eventId) as { id: number }[]) free(h.id)
 
-    const win = openWindowIds(eventId, owner.sessionToken, nowIso)
-    const ids = pick(win)
+    const ids = pick(win, pub)
     const all = [...ids]
     const eventIds = new Set([eventId])
     // Bundle levels also hold the same seat in every other event of the bundle.
@@ -110,7 +117,7 @@ function place(eventId: number, owner: Owner, qty: number, pick: (win: number[])
     const r = db
       .prepare(
         `UPDATE inventory SET status = 'held', hold_id = ?, held_until = ?
-         WHERE event_id IN (${marks(eventIds.size)}) AND id IN (${marks(all.length)}) AND ${visible('window_id', win.length)} AND
+         WHERE event_id IN (${marks(eventIds.size)}) AND id IN (${marks(all.length)}) AND ${visible('window_id', win.length, pub)} AND
            (status = 'available' OR (status = 'held' AND held_until < ?))`,
       )
       .run(holdId, expiresAt, ...eventIds, ...all, ...win, nowIso)
@@ -131,14 +138,14 @@ export function holdSeats(eventId: number, owner: Owner, seatIds: number[]): Hel
 
 // First run of `qty` consecutive seat numbers in one row, best section rank first. ADA seats are kept for accessible requests.
 export function holdBestAvailable(eventId: number, owner: Owner, qty: number, levelId?: number, accessible = false): Held {
-  return place(eventId, owner, qty, (win) => {
+  return place(eventId, owner, qty, (win, pub) => {
     const args: (string | number)[] = [eventId, ...win, new Date().toISOString()]
     if (levelId) args.push(levelId)
     const rows = db
       .prepare(
         `SELECT i.id, i.section_id, st.row, st.number FROM inventory i JOIN seats st ON st.id = i.seat_id JOIN sections s ON s.id = i.section_id
          JOIN price_levels pl ON pl.id = i.price_level_id
-         WHERE i.event_id = ? AND ${visible('i.window_id', win.length)} AND (i.status = 'available' OR (i.status = 'held' AND i.held_until < ?))
+         WHERE i.event_id = ? AND ${visible('i.window_id', win.length, pub)} AND (i.status = 'available' OR (i.status = 'held' AND i.held_until < ?))
            ${levelId ? 'AND i.price_level_id = ?' : 'AND pl.event_ids IS NULL'} AND ${accessible ? '(st.accessible = 1 OR st.companion = 1)' : 'st.accessible = 0 AND st.companion = 0'}
          ORDER BY s.rank, s.id, st.row, st.number`,
       )
@@ -154,11 +161,11 @@ export function holdBestAvailable(eventId: number, owner: Owner, qty: number, le
 }
 
 export function holdGA(eventId: number, owner: Owner, sectionId: number, qty: number): Held {
-  return place(eventId, owner, qty, (win) => {
+  return place(eventId, owner, qty, (win, pub) => {
     if (!db.prepare("SELECT 1 FROM inventory WHERE event_id = ? AND section_id = ? AND seat_id IS NULL LIMIT 1").get(eventId, sectionId)) throw new HoldError('Unknown section', 400)
     const rows = db
       .prepare(
-        `SELECT id FROM inventory WHERE event_id = ? AND section_id = ? AND seat_id IS NULL AND ${visible('window_id', win.length)}
+        `SELECT id FROM inventory WHERE event_id = ? AND section_id = ? AND seat_id IS NULL AND ${visible('window_id', win.length, pub)}
            AND (status = 'available' OR (status = 'held' AND held_until < ?)) ORDER BY slot LIMIT ?`,
       )
       .all(eventId, sectionId, ...win, new Date().toISOString(), qty) as { id: number }[]

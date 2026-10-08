@@ -40,6 +40,16 @@ export function joinQueue(eventId: number, sessionToken: string, userId: number 
       | undefined
     if (mine && !(mine.admitted_at && mine.expires_at! <= iso(now))) return
     if (mine) db.prepare('DELETE FROM queue_entries WHERE id = ?').run(mine.id)
+    // One place per ACCOUNT: a logged-in user joining from a second browser takes over their existing live entry instead of getting another draw.
+    if (userId) {
+      const other = db.prepare('SELECT id, admitted_at, expires_at FROM queue_entries WHERE event_id = ? AND user_id = ? AND session_token != ?').get(eventId, userId, sessionToken) as
+        | { id: number; admitted_at: string | null; expires_at: string | null }
+        | undefined
+      if (other && !(other.admitted_at && other.expires_at! <= iso(now))) {
+        db.prepare('UPDATE queue_entries SET session_token = ? WHERE id = ?').run(sessionToken, other.id)
+        return
+      }
+    }
     const pre = !!ev.onsale_at && Date.parse(ev.onsale_at) > now
     const rank = pre ? randomInt(1, 1_000_000_000) : ((db.prepare('SELECT max(rank) AS m FROM queue_entries WHERE event_id = ?').get(eventId) as { m: number | null }).m ?? 0) + 1
     db.prepare('INSERT INTO queue_entries (event_id, session_token, user_id, rank, joined_at) VALUES (?,?,?,?,?)').run(eventId, sessionToken, userId, rank, iso(now))

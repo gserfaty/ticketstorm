@@ -1,8 +1,9 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { db } from './db.ts'
 
-// ponytail: trusts the first x-forwarded-for hop (a proxy must set it); without a proxy a client can spoof it. Add trusted-proxy config when deployed.
-export const clientIp = (h: Headers) => h.get('x-forwarded-for')?.split(',')[0].trim() || 'local'
+// x-forwarded-for is client-controlled unless a proxy we run appends to it, so it is read only when TRUST_PROXY=1, and then the LAST entry
+// (the one our proxy added), never the first. Otherwise every caller shares 'local'.
+export const clientIp = (h: Headers) => (process.env.TRUST_PROXY === '1' ? h.get('x-forwarded-for')?.split(',').pop()?.trim() : '') || 'local'
 
 // Fixed-window counter in ONE upsert. True while the caller is within `limit` hits per window.
 export function hit(key: string, limit: number, windowMs = 60_000, now = Date.now()): boolean {

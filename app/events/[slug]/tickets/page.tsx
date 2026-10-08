@@ -17,9 +17,12 @@ export default async function Tickets({ params, searchParams }: { params: Promis
   const { slug } = await params
   const e = getEvent(slug)
   if (!e) notFound()
-  if (!eventState(e!).canBuy) redirect(`/events/${slug}`)
   const token = (await getSession())?.token
-  if (e!.queue_enabled && !(token && isAdmitted(e!.id, token))) redirect(`/queue/${e!.id}`)
+  const win = openWindowIds(e!.id, token)
+  const st = eventState(e!)
+  // an unlocked presale gets in without the waiting room, and before the public on-sale
+  if (!st.canBuy && !(win.length && st.label === 'Upcoming')) redirect(`/events/${slug}`)
+  if (e!.queue_enabled && !win.length && !(token && isAdmitted(e!.id, token))) redirect(`/queue/${e!.id}`)
   const sp = await searchParams
   const qty = Math.min(Math.max(parseInt(sp.qty ?? '', 10) || 2, 1), e!.ticket_limit)
   const listings = activeListings(e!.id, (await getUser())?.id ?? null)
@@ -65,7 +68,7 @@ export default async function Tickets({ params, searchParams }: { params: Promis
     <>
       <h1>{e!.title}</h1>
       <p className="muted">{e!.venue} · pick seats, or let us find the best available. Tickets are held for a few minutes while you decide.</p>
-      <SeatMap eventId={e!.id} ticketLimit={e!.ticket_limit} qty={qty} sections={sections} levels={levels} seats={seats} initial={getAvailability(e!.id, openWindowIds(e!.id, token))} hold={hold} />
+      <SeatMap eventId={e!.id} ticketLimit={e!.ticket_limit} qty={qty} sections={sections} levels={levels} seats={seats} initial={getAvailability(e!.id, win)} hold={hold} />
       {resale}
     </>
   )

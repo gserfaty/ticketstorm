@@ -139,6 +139,7 @@ export function runLottery(now = Date.now()) {
         ;[regs[i], regs[j]] = [regs[j], regs[i]]
       }
       regs.forEach((r, i) => {
+        db.prepare('UPDATE vf_registrations SET lottery_rank = ? WHERE id = ?').run(i, r.id)
         if (i < w.vf_slots) giveCode(w, r)
         else {
           db.prepare("UPDATE vf_registrations SET status = 'waitlisted' WHERE id = ?").run(r.id)
@@ -163,10 +164,12 @@ export function promoteWaitlist(now = Date.now()) {
            (SELECT 1 FROM orders o WHERE o.user_id = r.user_id AND o.event_id = ? AND o.status IN ('paid','review','partially_refunded'))`,
         )
         .all(id, w.event_id) as { id: number; user_id: number }[]
-      const next = db.prepare("SELECT id, user_id FROM vf_registrations WHERE window_id = ? AND status = 'waitlisted' ORDER BY id LIMIT ?").all(id, idle.length) as { id: number; user_id: number }[]
+      const next = db.prepare("SELECT id, user_id FROM vf_registrations WHERE window_id = ? AND status = 'waitlisted' ORDER BY lottery_rank LIMIT ?").all(id, idle.length) as { id: number; user_id: number }[]
       for (const r of idle) {
         db.prepare('UPDATE access_codes SET max_uses = uses WHERE window_id = ? AND user_id = ?').run(id, r.user_id)
-        db.prepare("UPDATE vf_registrations SET status = 'waitlisted', code = NULL WHERE id = ?").run(r.id)
+        db.prepare("UPDATE vf_registrations SET status = 'expired', code = NULL WHERE id = ?").run(r.id)
+        db.prepare('DELETE FROM window_unlocks WHERE window_id = ? AND session_token IN (SELECT token FROM sessions WHERE user_id = ?)').run(id, r.user_id)
+        notify(r.user_id, 'vf', `Your presale code for ${w.title} expired`, 'You did not buy in time, so your spot went to the waitlist.')
       }
       for (const r of next) giveCode(w, r)
     })
@@ -174,5 +177,5 @@ export function promoteWaitlist(now = Date.now()) {
 
 // Presale inventory nobody bought goes back on public sale once its window closes.
 export function releaseEndedWindows(now = Date.now()) {
-  db.prepare('UPDATE inventory SET window_id = NULL WHERE window_id IN (SELECT id FROM onsale_windows WHERE ends_at <= ?)').run(iso(now))
+  db.prepare("UPDATE inventory SET window_id = NULL WHERE status = 'available' AND window_id IN (SELECT id FROM onsale_windows WHERE ends_at <= ?)").run(iso(now))
 }

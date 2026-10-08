@@ -50,7 +50,7 @@ export function finalize(i: PayInput): PayResult {
     if (!hold) throw new HoldError('Your hold expired or is not yours', 410)
     const q = quote(i.holdId)
     if (!q.lines.length) throw new HoldError('Nothing to buy', 410)
-    assertTicketLimit(i.userId, hold.event_id, q.lines.length, i.sessionToken)
+    assertTicketLimit(i.userId, hold.event_id, q.lines.length, i.sessionToken, i.email)
     const meta: Meta = { userId: i.userId, email: i.email, exp: i.exp, save: i.save, billing: i.billing }
     const { payment } = recordCharge({ key: i.key, holdId: i.holdId, sessionToken: i.sessionToken, amount: q.total, method: i.method, brand: i.brand, last4: i.last4, meta })
     return resolve(payment, i.sessionToken)

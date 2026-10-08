@@ -136,10 +136,64 @@ test('Verified Fan lottery runs once, codes unlock the presale, waitlist is prom
   // a buys; b does not. After the buy-by time b's code dies and one waitlisted fan gets one.
   run("INSERT INTO orders (user_id, session_token, access_token, email, event_id, hold_id, status, subtotal, fees, tax, total, idempotency_key) VALUES (?, 's', 'tok', 'x', ?, ?, 'paid', 0,0,0,0,'k-vf')", a, ev, held.holdId)
   db.prepare('UPDATE onsale_windows SET vf_buy_by = ? WHERE id = ?').run(hour(-0.5), w)
+  const waiting = (db.prepare("SELECT user_id FROM vf_registrations WHERE window_id = ? AND status = 'waitlisted' ORDER BY lottery_rank").all(w) as { user_id: number }[]).map((r) => r.user_id)
+  db.prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES ('bsess', ?, '2099-01-01')").run(b)
+  db.prepare("INSERT INTO window_unlocks (window_id, session_token) VALUES (?, 'bsess')").run(w)
   acc.promoteWaitlist()
   acc.promoteWaitlist()
+  assert.deepEqual(st('expired'), [b], 'selected fan who missed the cutoff is expired, not waitlisted')
+  assert.ok(st('selected').includes(waiting[0]), 'promotion follows the lottery order')
+  assert.equal(db.prepare("SELECT 1 FROM window_unlocks WHERE session_token = 'bsess'").get(), undefined, 'their unlock is revoked')
   assert.equal(st('selected').length, 2, 'a stays selected; one waitlisted fan took b\'s place')
   assert.ok(!st('selected').includes(b))
   assert.throws(() => acc.redeemCode(ev, 'fresh', b, codeOf(a)), /another account/)
   assert.equal((db.prepare('SELECT count(*) AS n FROM access_codes WHERE window_id = ?').get(w) as { n: number }).n, 3)
+})
+
+test('a presale works on a queue-enabled event without queue admission, but only for window seats', () => {
+  const ev = makeEvent(8, 1)
+  db.prepare('UPDATE events SET onsale_at = ? WHERE id = ?').run(hour(5), ev) // public sale not started; waiting room would not admit yet
+  const w = window(ev)
+  acc.assignWindow(ev, w, secId, 'R0')
+  acc.generateCodes(ev, w, 1, 1)
+  const code = (db.prepare('SELECT code FROM access_codes WHERE window_id = ?').get(w) as { code: string }).code
+  assert.throws(() => inv.holdSeats(ev, guest('p'), [seat(ev, 'R0', 1)]), (e: Error & { status?: number }) => e.status === 403)
+  acc.redeemCode(ev, 'p', null, code)
+  assert.throws(() => inv.holdSeats(ev, guest('p'), [seat(ev, 'R1', 1)]), /taken/, 'public seats stay closed')
+  inv.holdSeats(ev, guest('p'), [seat(ev, 'R0', 1)])
+  assert.equal(inv.holdBestAvailable(ev, guest('p'), 2).ids.every((id) => (db.prepare('SELECT window_id FROM inventory WHERE id = ?').get(id) as { window_id: number }).window_id === w), true)
+})
+
+test('ticket_limit also counts paid tickets bought with the same email (guest or logged in)', () => {
+  const ev = makeEvent(2)
+  const o = run("INSERT INTO orders (user_id, session_token, access_token, email, event_id, hold_id, status, subtotal, fees, tax, total, idempotency_key) VALUES (NULL,'g','t','Dupe@X.test',?,?, 'paid', 0,0,0,0,'k-email')", ev, run("INSERT INTO holds (session_token, event_id, expires_at, status) VALUES ('g', ?, '2099-01-01', 'converted')", ev))
+  for (const id of [seat(ev, 'R0', 1), seat(ev, 'R0', 2)]) run("INSERT INTO order_items (order_id, kind, inventory_id, unit_cents, fee_cents, tax_cents) VALUES (?, 'ticket', ?, 0,0,0)", o, id)
+  assert.throws(() => inv.assertTicketLimit(null, ev, 1, 'other', 'dupe@x.test'), /Limit 2/)
+  assert.throws(() => inv.assertTicketLimit(user('dupe-user@x.test'), ev, 1, 'other', 'DUPE@x.test'), /Limit 2/)
+  inv.assertTicketLimit(null, ev, 1, 'other', 'someone@else.test')
+})
+
+test('a logged-in user cannot hold two places in the same waiting room', () => {
+  const ev = makeEvent(8, 1)
+  db.prepare('UPDATE events SET onsale_at = ? WHERE id = ?').run(hour(5), ev)
+  const u = user('twice@x.test')
+  q.joinQueue(ev, 'browser1', u)
+  q.joinQueue(ev, 'browser2', u)
+  assert.equal((db.prepare('SELECT count(*) AS n FROM queue_entries WHERE event_id = ?').get(ev) as { n: number }).n, 1)
+  assert.equal(q.queueStatus(ev, 'browser2').state, 'waiting', 'the latest browser holds the place')
+  assert.equal(q.queueStatus(ev, 'browser1').state, 'none')
+})
+
+test('ending a window only frees available seats', () => {
+  const ev = makeEvent()
+  const w = window(ev)
+  acc.assignWindow(ev, w, secId, 'R2')
+  acc.generateCodes(ev, w, 1, 1)
+  acc.redeemCode(ev, 'h', null, (db.prepare('SELECT code FROM access_codes WHERE window_id = ?').get(w) as { code: string }).code)
+  const held = inv.holdSeats(ev, guest('h'), [seat(ev, 'R2', 1)])
+  db.prepare('UPDATE onsale_windows SET ends_at = ? WHERE id = ?').run(hour(-1), w)
+  acc.releaseEndedWindows()
+  const win = (id: number) => (db.prepare('SELECT window_id FROM inventory WHERE id = ?').get(id) as { window_id: number | null }).window_id
+  assert.equal(win(held.ids[0]), w, 'held seat keeps its window')
+  assert.equal(win(seat(ev, 'R2', 2)), null)
 })

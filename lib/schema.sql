@@ -448,8 +448,9 @@ CREATE TABLE IF NOT EXISTS vf_registrations (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   window_id INTEGER NOT NULL REFERENCES onsale_windows(id),
   user_id INTEGER NOT NULL REFERENCES users(id),
-  status TEXT NOT NULL DEFAULT 'registered' CHECK (status IN ('registered','selected','waitlisted')),
+  status TEXT NOT NULL DEFAULT 'registered' CHECK (status IN ('registered','selected','waitlisted','expired')),
   code TEXT,
+  lottery_rank INTEGER,
   UNIQUE(window_id, user_id)
 );
 

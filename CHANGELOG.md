@@ -4,11 +4,21 @@ All notable changes, newest first. Format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+### P7 review fixes
+- **Presales were unusable on queue-enabled events.** The waiting room only admits from `onsale_at`, and `place()` required admission, so a presale (which runs before the public sale) could never be bought. `place()` now lets a session with an unlocked open window hold that window's seats without admission and before on-sale, restricted to window inventory (the visibility predicate takes `pub`); public seats still need admission and an open sale. The tickets page follows the same rule.
+- **Client IP was spoofable** (`lib/defense.ts`): the first `x-forwarded-for` entry is attacker-controlled, bypassing the 429 limits and the IP blocklist. It is now read only when `TRUST_PROXY=1`, using the last entry; otherwise the IP is `local`. Documented in README.md.
+- **Guests bypassed `ticket_limit`**: logging out and buying as a guest reset the count. `finalize` now also counts paid tickets on orders with the same email (case-insensitive), for guests and logged-in users alike.
+- **Waitlist promotion order**: promotion used registration order. The lottery now stores each position in `vf_registrations.lottery_rank` and promotion follows it.
+- **Misleading VF state after the buy-by cutoff**: selected fans who did not buy were set back to `waitlisted`, and their session unlocks survived the code revocation. They are now `expired` (new status), their unlocks are deleted, and they get an in-app notification.
+- **Several draws in the waiting room**: a logged-in user could join from N browsers for N places. Joining logged in now takes over the user's existing live entry (moves it to the joining session) instead of creating another.
+- **`releaseEndedWindows` cleared `window_id` on held rows** too; it now only clears `status='available'` rows.
+- Tests added for each fix in `tests/access.test.ts`.
+
 ### Added
 - README.md, ARCHITECTURE.md and this CHANGELOG.md.
 
 ### Known limitations
-- See "Known limitations and deferrals" in ARCHITECTURE.md (three `ponytail:` deferrals: scan timestamp trust, whole-bundle refund, `x-forwarded-for` trust).
+- See "Known limitations and deferrals" in ARCHITECTURE.md (`ponytail:` deferrals: scan timestamp trust, whole-bundle refund, proxy-dependent client IP).
 
 ---
 

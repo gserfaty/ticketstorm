@@ -29,6 +29,10 @@ npm run dev       # http://localhost:3000
 | `npm test` | `node --test "tests/**/*.test.ts"` (temp DBs, never `data/`) |
 | `npm run typecheck` | `tsc --noEmit` |
 
+## Configuration
+
+- `TRUST_PROXY=1`: read the client IP (used for rate limits and the IP blocklist) from the **last** `x-forwarded-for` entry, i.e. the one your own reverse proxy appended. Leave it unset when the app is not behind such a proxy: every caller then shares the IP `local`, so the per-IP limits become one global limit but cannot be spoofed.
+
 ## Seed accounts
 
 Password for all: `password123`
