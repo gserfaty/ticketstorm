@@ -3,14 +3,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as RKeyboardEvent, PointerEvent as RPointerEvent } from 'react'
 import Countdown from './Countdown.tsx'
 
-export type MapSection = { id: number; name: string; kind: 'reserved' | 'ga'; path: string; lx: number; ly: number }
-export type MapLevel = { id: number; name: string; color: string | null; cents: number; type: string }
+export type MapSection = { id: number; name: string; kind: 'reserved' | 'ga'; path: string; lx: number; ly: number; rank: number }
+// cents = the price to display (already all-in when the fan chose all-in pricing)
+export type MapLevel = { id: number; name: string; color: string | null; cents: number; type: string; perks: string | null }
 // [inventory id, section id, row, number, x, y, flags] flags: 1 accessible, 2 companion
 export type MapSeat = [number, number, string, number, number, number, number]
 export type Avail = { seats: (readonly [number, string, number])[]; ga: { sectionId: number; levelId: number; total: number; free: number }[] }
 export type Hold = { id: number; expiresAt: string; seatIds: number[]; ga: { sectionId: number; qty: number } | null }
 
-type Props = { eventId: number; ticketLimit: number; qty: number; sections: MapSection[]; levels: MapLevel[]; seats: MapSeat[]; initial: Avail; hold: Hold | null }
+type Props = { eventId: number; ticketLimit: number; allIn: boolean; qty: number; sections: MapSection[]; levels: MapLevel[]; seats: MapSeat[]; initial: Avail; hold: Hold | null }
 type VB = { x: number; y: number; w: number; h: number }
 
 const W = 1000
@@ -41,12 +42,13 @@ function seatRadius(ss: MapSeat[]) {
   return Math.min(gap(ss.map((s) => s[4])), gap(ss.map((s) => s[5]))) * 0.42
 }
 
-export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, seats, initial, hold: initialHold }: Props) {
+export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, levels, seats, initial, hold: initialHold }: Props) {
   const [avail, setAvail] = useState(initial)
   const [hold, setHold] = useState(initialHold)
   const [selected, setSelected] = useState<number[]>([])
   const [open, setOpen] = useState<number | null>(initialHold?.ga?.sectionId ?? null)
   const [vb, setVb] = useState<VB>(FULL)
+  const [sort, setSort] = useState<'price' | 'best'>('price')
   const [maxPrice, setMaxPrice] = useState(Math.max(...levels.map((l) => l.cents)))
   const [adaOnly, setAdaOnly] = useState(false)
   const [bestQty, setBestQty] = useState(qty)
@@ -75,6 +77,31 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
   const gaById = useMemo(() => new Map(avail.ga.map((g) => [g.sectionId, g])), [avail])
   const mine = useMemo(() => new Set(hold?.seatIds), [hold])
   const price = (id: number) => levelById.get(status.get(id)?.[2] ?? 0)?.cents ?? 0
+
+  // List view: every section that still has seats, with its cheapest open price. Sort by lowest price or best seats (section rank).
+  const list = useMemo(() => {
+    const rows: { s: MapSection; free: number; cents: number; level: string }[] = []
+    for (const s of sections) {
+      let free = 0
+      let best: MapLevel | undefined
+      if (s.kind === 'ga') {
+        const g = gaById.get(s.id)
+        free = g?.free ?? 0
+        best = levelById.get(g?.levelId ?? 0)
+      } else {
+        for (const x of bySection.get(s.id) ?? []) {
+          const st = status.get(x[0])
+          const lv = levelById.get(st?.[2] ?? 0)
+          if (st?.[1] === 'a' && lv) {
+            free++
+            if (!best || lv.cents < best.cents) best = lv
+          }
+        }
+      }
+      if (free && best && best.cents <= maxPrice) rows.push({ s, free, cents: best.cents, level: best.name })
+    }
+    return rows.sort((a, b) => (sort === 'price' ? a.cents - b.cents || a.s.rank - b.s.rank : a.s.rank - b.s.rank || a.cents - b.cents))
+  }, [sections, bySection, gaById, levelById, status, sort, maxPrice])
 
   const refresh = useCallback(async () => {
     const r = await fetch(`/api/events/${eventId}/inventory`, { cache: 'no-store' }).catch(() => null)
@@ -208,6 +235,7 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
         <label><input type="checkbox" checked={adaOnly} onChange={(e) => setAdaOnly(e.target.checked)} /> ♿ Accessible seating</label>
       </div>
 
+      <div className="map-layout">
       <div className="map-wrap" ref={wrap}>
         <svg ref={svg} viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`} role="group" aria-label="Seat map" style={{ touchAction: vb.w < W ? 'none' : 'pan-y' }}
           onPointerDown={down} onPointerMove={move} onPointerUp={() => (drag.current = null)} onPointerLeave={() => { drag.current = null; setTip(null) }}>
@@ -253,15 +281,32 @@ export default function SeatMap({ eventId, ticketLimit, qty, sections, levels, s
         </div>
         {tip && <div className="tip" style={{ left: tip.x + 12, top: tip.y + 12 }}>{tip.text}</div>}
       </div>
+      <aside className="listview" aria-label="Sections with tickets">
+        <label>Sort <select value={sort} onChange={(e) => setSort(e.target.value as 'price' | 'best')}>
+          <option value="price">Lowest price</option>
+          <option value="best">Best seats</option>
+        </select></label>
+        <ul>
+          {list.map((r) => (
+            <li key={r.s.id}>
+              <button onClick={() => openSection(r.s)}>{r.s.kind === 'ga' ? 'GA ' : 'Section '}{r.s.name}</button>{' '}
+              {r.level} · {usd(r.cents)}{allIn ? ' all-in' : ''} <span className="muted">{r.free} left</span>
+            </li>
+          ))}
+          {list.length === 0 && <li className="muted">Nothing in this price range.</li>}
+        </ul>
+      </aside>
+      </div>
 
       <ul className="legend">
-        {levels.map((l) => <li key={l.id}><i style={{ background: l.color ?? '#3b82f6' }} /> {l.name} {usd(l.cents)}</li>)}
+        {levels.map((l) => <li key={l.id} title={l.perks ?? undefined}><i style={{ background: l.color ?? '#3b82f6' }} /> {l.name} {usd(l.cents)}</li>)}
         <li><i className="st-sel" /> Selected</li>
         <li><i className="st-mine" /> Yours (held)</li>
         <li><i className="st-h" /> Held by others</li>
         <li><i className="st-s" /> Sold</li>
         <li><i className="st-b" /> Unavailable</li>
         <li>♿ Accessible</li>
+        <li className="muted">{allIn ? 'Prices include fees and tax' : 'Prices before fees and tax'}</li>
         <li><i className="st-r" /> Verified Resale (buy below the map)</li>
       </ul>
 

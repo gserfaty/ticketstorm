@@ -153,7 +153,8 @@ CREATE TABLE IF NOT EXISTS events (
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','cancelled','postponed','rescheduled')),
   onsale_at TEXT,
   hold_minutes INTEGER NOT NULL DEFAULT 8,
-  ticket_limit INTEGER NOT NULL DEFAULT 8,
+  ticket_limit INTEGER NOT NULL DEFAULT 8, -- per account for the whole event (paid + held)
+  order_limit INTEGER,                     -- per order/hold; NULL = same as ticket_limit
   queue_enabled INTEGER NOT NULL DEFAULT 0,
   queue_rate INTEGER,
   queue_cap INTEGER,
@@ -183,8 +184,11 @@ CREATE TABLE IF NOT EXISTS price_levels (
   color TEXT,
   price_cents INTEGER NOT NULL,
   ticket_type TEXT NOT NULL DEFAULT 'standard' CHECK (ticket_type IN ('standard','vip','platinum','accessible','standing')),
-  dyn_min_cents INTEGER,
+  dyn_min_cents INTEGER, -- dynamic pricing: price = clamp(base * (1 + k * sold% + j * queue factor), min, max); k = j = 0 -> fixed
   dyn_max_cents INTEGER,
+  dyn_k REAL,
+  dyn_j REAL,
+  perks TEXT,            -- VIP / Meet & Greet package contents, shown to buyers
   event_ids TEXT -- bundle level: JSON array of event ids; holding a seat holds the same seat in each
 );
 
@@ -195,7 +199,37 @@ CREATE TABLE IF NOT EXISTS offers (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   event_id INTEGER NOT NULL REFERENCES events(id),
   name TEXT NOT NULL CHECK (name IN ('adult','child','senior','student')),
-  pct_off INTEGER NOT NULL DEFAULT 0
+  pct_off INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(event_id, name)
+);
+
+-- Add-ons sold at checkout. `sold` only ever changes through the guarded UPDATE in createOrder.
+CREATE TABLE IF NOT EXISTS addons (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  kind TEXT NOT NULL CHECK (kind IN ('parking','merch','vip','food','hospitality','camping','shuttle')),
+  name TEXT NOT NULL,
+  price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+  inventory INTEGER NOT NULL CHECK (inventory >= 0),
+  sold INTEGER NOT NULL DEFAULT 0,
+  CHECK (sold <= inventory)
+);
+CREATE INDEX IF NOT EXISTS addons_event ON addons(event_id);
+
+-- org_id NULL = platform-wide; event_id NULL = every event of the org (or every event when org_id is NULL too)
+CREATE TABLE IF NOT EXISTS promo_codes (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  org_id INTEGER REFERENCES orgs(id),
+  event_id INTEGER REFERENCES events(id),
+  code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  kind TEXT NOT NULL CHECK (kind IN ('pct','fixed')),
+  amount INTEGER NOT NULL CHECK (amount > 0), -- percent for pct, cents for fixed
+  max_uses INTEGER NOT NULL CHECK (max_uses > 0),
+  uses INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT,
+  CHECK (uses <= max_uses)
 );
 
 CREATE INDEX IF NOT EXISTS event_artists_artist ON event_artists(artist_id);
@@ -235,6 +269,7 @@ CREATE TABLE IF NOT EXISTS holds (
   user_id INTEGER REFERENCES users(id),
   event_id INTEGER NOT NULL REFERENCES events(id),
   expires_at TEXT NOT NULL,
+  options TEXT, -- JSON checkout choices: { promo, offers: {inventoryId: offerId}, addons: {addonId: qty} }
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','converted','released'))
 );
 CREATE INDEX IF NOT EXISTS holds_session ON holds(session_token, event_id);
@@ -252,6 +287,7 @@ CREATE TABLE IF NOT EXISTS inventory (
   hold_id INTEGER REFERENCES holds(id),
   held_until TEXT,
   window_id INTEGER,
+  locked_cents INTEGER, -- unit face price fixed when the row was held; quote and finalize use it, never the live price
   UNIQUE(event_id, seat_id),
   UNIQUE(event_id, section_id, slot)
 );
@@ -287,7 +323,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   id INTEGER PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   order_id INTEGER NOT NULL REFERENCES orders(id),
-  kind TEXT NOT NULL DEFAULT 'ticket' CHECK (kind IN ('ticket','addon','protection','giftcard','fee')),
+  kind TEXT NOT NULL DEFAULT 'ticket' CHECK (kind IN ('ticket','addon','protection','giftcard','fee','discount')),
   inventory_id INTEGER REFERENCES inventory(id),
   addon_id INTEGER,
   offer_id INTEGER,
@@ -301,13 +337,15 @@ CREATE TABLE IF NOT EXISTS tickets (
   id INTEGER PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   order_id INTEGER NOT NULL REFERENCES orders(id),
-  inventory_id INTEGER NOT NULL REFERENCES inventory(id),
+  inventory_id INTEGER REFERENCES inventory(id), -- NULL for an add-on pass (parking, hospitality)
+  addon_id INTEGER REFERENCES addons(id),         -- set exactly when inventory_id is NULL
   owner_id INTEGER REFERENCES users(id), -- NULL = guest order
   status TEXT NOT NULL DEFAULT 'valid' CHECK (status IN ('valid','used','transferred','listed','resold','cancelled','expired')),
   secret TEXT NOT NULL,
   scanned_at TEXT,
   scanned_by INTEGER REFERENCES users(id),
-  restrictions TEXT
+  restrictions TEXT,
+  CHECK ((inventory_id IS NULL) <> (addon_id IS NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_live_ticket ON tickets(inventory_id) WHERE status IN ('valid','listed','used');
 CREATE INDEX IF NOT EXISTS tickets_owner ON tickets(owner_id);

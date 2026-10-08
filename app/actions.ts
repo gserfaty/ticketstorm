@@ -100,6 +100,19 @@ export async function setCity(f: FormData) {
   redirect(back)
 }
 
+export async function toggleAllIn() {
+  const on = (await cookies()).get('allin')?.value === '1'
+  ;(await cookies()).set('allin', on ? '0' : '1', { path: '/', maxAge: 365 * 86_400 })
+  // return to the referring page, same host only (no open redirect)
+  const h = await headers()
+  let back = '/'
+  try {
+    const u = new URL(h.get('referer') ?? '')
+    if (u.host === h.get('host')) back = u.pathname + u.search
+  } catch {}
+  redirect(back)
+}
+
 export async function setCityByCoords(lat: number, lng: number) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return
   const c = nearestCity(lat, lng)

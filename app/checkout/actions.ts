@@ -6,6 +6,8 @@ import { db } from '../../lib/db.ts'
 import { allowed, checkCaptcha, clientIp, isBlocked, newCaptcha } from '../../lib/defense.ts'
 import type { Captcha } from '../../lib/defense.ts'
 import { HoldError } from '../../lib/inventory.ts'
+import { UserError } from '../../lib/platform.ts'
+import { setCheckoutOptions } from '../../lib/pricing.ts'
 import { approve3ds, fail3ds, finalize } from '../../lib/orders.ts'
 import { brandOf, validateCard } from '../../lib/payments.ts'
 import { getSession, getUser } from '../../lib/session.ts'
@@ -71,6 +73,26 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
   if ('orderId' in r) redirect(`/orders/${r.orderId}`)
   if ('threeDs' in r) redirect(`/checkout/3ds/${r.threeDs}`)
   return bad(DECLINES[r.declined] ?? 'Payment declined')
+}
+
+// Promo code, per-ticket offers and add-ons. They are stored on the hold, so the next quote (and finalize, and 3DS) all see the same choices.
+export async function applyOptions(f: FormData) {
+  const session = await getSession()
+  const holdId = Number(field(f, 'holdId'))
+  if (!session || !Number.isInteger(holdId) || holdId < 1) redirect('/')
+  const offers: Record<number, number> = {}
+  const addons: Record<number, number> = {}
+  for (const [k, v] of f.entries()) {
+    const m = /^(offer|addon)-(\d+)$/.exec(k)
+    if (m) (m[1] === 'offer' ? offers : addons)[Number(m[2])] = Number(v)
+  }
+  try {
+    setCheckoutOptions(holdId, session!.token, { promo: field(f, 'promo'), offers, addons })
+  } catch (e) {
+    if (e instanceof UserError) back(holdId, e.message)
+    throw e
+  }
+  redirect(`/checkout/${holdId}?notice=${encodeURIComponent('Order updated')}`)
 }
 
 export async function threeDs(f: FormData) {

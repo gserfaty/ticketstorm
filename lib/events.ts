@@ -27,8 +27,6 @@ export type EventRow = {
   state: string
   vlat: number
   vlng: number
-  min_cents: number | null
-  max_cents: number | null
 }
 
 export type Filters = {
@@ -47,9 +45,7 @@ export type Filters = {
 type Params = Record<string, string | string[] | undefined>
 
 const SELECT = `SELECT e.id, e.slug, e.title, e.category, e.genre, e.starts_at, e.status, e.onsale_at, e.image,
-  v.name AS venue, v.tz, c.name AS city, c.state, v.lat AS vlat, v.lng AS vlng,
-  (SELECT min(price_cents) FROM price_levels p WHERE p.event_id = e.id) AS min_cents,
-  (SELECT max(price_cents) FROM price_levels p WHERE p.event_id = e.id) AS max_cents
+  v.name AS venue, v.tz, c.name AS city, c.state, v.lat AS vlat, v.lng AS vlng
   FROM events e JOIN venues v ON v.id = e.venue_id JOIN cities c ON c.id = v.city_id`
 const VISIBLE = `e.status != 'draft' AND e.approved = 1`
 
@@ -140,7 +136,7 @@ export function getEvent(slug: string) {
       FROM events e JOIN venues v ON v.id = e.venue_id JOIN cities c ON c.id = v.city_id WHERE e.slug = ? AND ${VISIBLE}`)
     .get(slug) as
     | { id: number; slug: string; title: string; category: string; genre: string | null; starts_at: string; doors_at: string | null; image: string | null
-        description: string | null; status: string; onsale_at: string | null; ticket_limit: number; venue: string; venue_slug: string; tz: string
+        description: string | null; status: string; onsale_at: string | null; ticket_limit: number; order_limit: number | null; venue: string; venue_slug: string; tz: string
         address: string; city: string; state: string; venue_id: number; queue_enabled: number }
     | undefined
   if (!e) return undefined
@@ -152,6 +148,9 @@ export function getEvent(slug: string) {
     .all(e.id) as { id: number; name: string; color: string | null; price_cents: number; ticket_type: string }[]
   return { ...e, lineup, levels }
 }
+
+// Most tickets one order (hold) may contain: order_limit, never above the per-event ticket_limit.
+export const orderLimit = (e: { ticket_limit: number; order_limit: number | null }) => Math.min(e.order_limit ?? e.ticket_limit, e.ticket_limit)
 
 // Badge shown on cards and the event page. Pass soldOut (see isSoldOut) where it is cheap to know.
 export function eventState(e: { status: string; starts_at: string; onsale_at: string | null }, now = Date.now(), soldOut = false) {

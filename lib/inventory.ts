@@ -1,7 +1,8 @@
 import { db, tx } from './db.ts'
-import { eventState } from './events.ts'
+import { eventState, orderLimit } from './events.ts'
 import { openWindowIds } from './access.ts'
 import { admittedNow } from './queue.ts'
+import { lockPrices } from './pricing.ts'
 
 export class HoldError extends Error {
   status: number
@@ -31,6 +32,55 @@ export function assertTicketLimit(userId: number | null, eventId: number, qty: n
     .prepare("SELECT count(*) AS n FROM inventory i JOIN holds h ON h.id = i.hold_id WHERE h.user_id = ? AND h.event_id = ? AND h.status = 'active' AND h.expires_at > ? AND h.session_token != ? AND i.status = 'held'")
     .get(userId, eventId, new Date().toISOString(), sessionToken) as { n: number }).n
   if (paid + held + qty > limit) throw new HoldError(`Limit ${limit} tickets per account for this event (you already have ${paid + held})`, 409)
+}
+
+// ---- orphan-seat rule: a selection may not leave exactly one empty seat between taken seats, or between a taken seat and the row edge ----
+export type Cell = { number: number; free: boolean }
+
+// Pure. `row` is every seat of one row (free = can still be bought), `picked` the seat numbers being chosen. Returns the number of a seat that
+// would be stranded: a free seat with no free neighbour that sits next to a picked seat. A gap in the numbering (aisle) counts as an edge.
+// Single seats that were already stranded and are not next to the selection are not our business.
+export function orphanSeat(row: Cell[], picked: Set<number>): number | undefined {
+  const cells = [...row].sort((a, b) => a.number - b.number)
+  const st = (c: Cell) => (picked.has(c.number) ? 'picked' : c.free ? 'free' : 'taken')
+  for (let i = 0; i < cells.length; i++) {
+    if (st(cells[i]) !== 'free') continue
+    const side = (n: Cell | undefined, d: number) => (n && n.number === cells[i].number + d ? st(n) : 'edge')
+    const l = side(cells[i - 1], -1)
+    const r = side(cells[i + 1], 1)
+    if (l !== 'free' && r !== 'free' && (l === 'picked' || r === 'picked')) return cells[i].number
+  }
+  return undefined
+}
+
+type RowCells = { section: string; row: string; cells: (Cell & { id: number })[] }
+// Physical state of whole rows (all of an event's rows, or only the rows containing `ids`). Taken = held by anyone else, sold, blocked,
+// or hidden from this session by a presale window. The caller's own hold must already be freed.
+function loadRows(eventId: number, win: number[], pub: boolean, ids?: number[]): Map<string, RowCells> {
+  const rows = db
+    .prepare(
+      `SELECT i.id, i.section_id, s.name AS section, st.row, st.number,
+         (i.status = 'available' OR (i.status = 'held' AND i.held_until < ?)) AND ${visible('i.window_id', win.length, pub)} AS free
+       FROM inventory i JOIN seats st ON st.id = i.seat_id JOIN sections s ON s.id = i.section_id
+       WHERE i.event_id = ? ${ids ? `AND (i.section_id, st.row) IN (SELECT i2.section_id, st2.row FROM inventory i2 JOIN seats st2 ON st2.id = i2.seat_id WHERE i2.id IN (${marks(ids.length)}))` : ''}`,
+    )
+    .all(new Date().toISOString(), ...win, eventId, ...(ids ?? [])) as { id: number; section_id: number; section: string; row: string; number: number; free: number }[]
+  const out = new Map<string, RowCells>()
+  for (const r of rows) {
+    const k = `${r.section_id}|${r.row}`
+    if (!out.has(k)) out.set(k, { section: r.section, row: r.row, cells: [] })
+    out.get(k)!.cells.push({ id: r.id, number: r.number, free: !!r.free })
+  }
+  return out
+}
+
+// Shared by manual selection (holdSeats) and Best Available: throws a clear HoldError if choosing `ids` strands a seat.
+function assertNoOrphans(eventId: number, ids: number[], win: number[], pub: boolean) {
+  const picked = new Set(ids)
+  for (const { section, row, cells } of loadRows(eventId, win, pub, ids).values()) {
+    const n = orphanSeat(cells, new Set(cells.filter((c) => picked.has(c.id)).map((c) => c.number)))
+    if (n !== undefined) throw new HoldError(`Seat ${n} in Section ${section} Row ${row} would be left empty on its own. Choose seats that don't leave a single empty seat.`)
+  }
 }
 
 // One row per reserved seat and per GA slot. Levels by section: accessible/companion seats -> Accessible,
@@ -68,8 +118,8 @@ export function free(holdId: number) {
 // all-or-nothing (changes !== ids.length -> throw -> ROLLBACK). `pick` chooses candidate ids inside the same tx.
 function place(eventId: number, owner: Owner, qty: number, pick: (win: number[], pub: boolean) => number[]): Held {
   return tx(() => {
-    const ev = db.prepare('SELECT id, status, starts_at, onsale_at, hold_minutes, ticket_limit FROM events WHERE id = ? AND approved = 1').get(eventId) as
-      | { id: number; status: string; starts_at: string; onsale_at: string | null; hold_minutes: number; ticket_limit: number }
+    const ev = db.prepare('SELECT id, status, starts_at, onsale_at, hold_minutes, ticket_limit, order_limit FROM events WHERE id = ? AND approved = 1').get(eventId) as
+      | { id: number; status: string; starts_at: string; onsale_at: string | null; hold_minutes: number; ticket_limit: number; order_limit: number | null }
       | undefined
     if (!ev || ev.status === 'draft') throw new HoldError('Event not found', 404)
     // Public seats need the waiting room (if any) and an open sale. A session with an unlocked presale window can still buy that window's
@@ -81,7 +131,9 @@ function place(eventId: number, owner: Owner, qty: number, pick: (win: number[],
     if (!pub && !(win.length && (st.canBuy || st.label === 'Upcoming'))) {
       throw admitted ? new HoldError('Tickets are not on sale for this event', 409) : new HoldError('Join the waiting room to buy tickets for this event', 403)
     }
-    if (!Number.isInteger(qty) || qty < 1 || qty > ev.ticket_limit) throw new HoldError(`Choose 1 to ${ev.ticket_limit} tickets`, 400)
+    // per order (this hold) and per event (assertTicketLimit, across orders): ticket_limit is the per-event cap, order_limit the per-order one
+    const perOrder = orderLimit(ev)
+    if (!Number.isInteger(qty) || qty < 1 || qty > perOrder) throw new HoldError(`Choose 1 to ${perOrder} tickets per order`, 400)
 
     const now = new Date()
     const nowIso = now.toISOString()
@@ -122,6 +174,7 @@ function place(eventId: number, owner: Owner, qty: number, pick: (win: number[],
       )
       .run(holdId, expiresAt, ...eventIds, ...all, ...win, nowIso)
     if (r.changes !== all.length) throw new HoldError('Those tickets were just taken')
+    lockPrices(all)
     return { holdId, expiresAt, ids }
   })
 }
@@ -129,14 +182,15 @@ function place(eventId: number, owner: Owner, qty: number, pick: (win: number[],
 export function holdSeats(eventId: number, owner: Owner, seatIds: number[]): Held {
   const ids = [...new Set(seatIds)]
   if (ids.length !== seatIds.length) throw new HoldError('Duplicate seats', 400)
-  return place(eventId, owner, ids.length, () => {
+  return place(eventId, owner, ids.length, (win, pub) => {
     const found = db.prepare(`SELECT id FROM inventory WHERE event_id = ? AND seat_id IS NOT NULL AND id IN (${marks(ids.length)})`).all(eventId, ...ids)
     if (found.length !== ids.length) throw new HoldError('Unknown seat', 400)
+    assertNoOrphans(eventId, ids, win, pub)
     return ids
   })
 }
 
-// First run of `qty` consecutive seat numbers in one row, best section rank first. ADA seats are kept for accessible requests.
+// First `qty` consecutive seats in one row (best section rank first) that don't strand a seat. ADA seats are kept for accessible requests.
 export function holdBestAvailable(eventId: number, owner: Owner, qty: number, levelId?: number, accessible = false): Held {
   return place(eventId, owner, qty, (win, pub) => {
     const args: (string | number)[] = [eventId, ...win, new Date().toISOString()]
@@ -150,11 +204,22 @@ export function holdBestAvailable(eventId: number, owner: Owner, qty: number, le
          ORDER BY s.rank, s.id, st.row, st.number`,
       )
       .all(...args) as { id: number; section_id: number; row: string; number: number }[]
+    const all = loadRows(eventId, win, pub)
+    // maximal runs of consecutive wanted seats in one row; slide a window of qty over each and take the first that passes the orphan rule
     let run: typeof rows = []
-    for (const r of rows) {
+    for (let i = 0; i <= rows.length; i++) {
+      const r = rows[i]
       const prev = run[run.length - 1]
-      run = prev && prev.section_id === r.section_id && prev.row === r.row && prev.number === r.number - 1 ? [...run, r] : [r]
-      if (run.length === qty) return run.map((x) => x.id)
+      if (r && prev && prev.section_id === r.section_id && prev.row === r.row && prev.number === r.number - 1) {
+        run.push(r)
+        continue
+      }
+      const cells = run.length ? all.get(`${run[0].section_id}|${run[0].row}`)!.cells : []
+      for (let s = 0; s + qty <= run.length; s++) {
+        const w = run.slice(s, s + qty)
+        if (orphanSeat(cells, new Set(w.map((x) => x.number))) === undefined) return w.map((x) => x.id)
+      }
+      run = r ? [r] : []
     }
     throw new HoldError(`No ${qty} adjacent seats available`)
   })

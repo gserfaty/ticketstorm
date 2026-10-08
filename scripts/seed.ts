@@ -281,6 +281,38 @@ const vf = addWindow(cat.id, { name: 'Verified Fan Presale', kind: 'verified_fan
 heldBack('neon-harbor-catskill-saturday', vf)
 }
 
+// P8 pricing: promo codes, offers, a dynamic Platinum level and a Meet & Greet package, add-ons (parking has ONE space).
+{
+  const org = (db.prepare("SELECT id FROM orgs WHERE name = 'Storm Live'").get() as { id: number }).id
+  const ev = (slug: string) => db.prepare('SELECT id, venue_id FROM events WHERE slug = ?').get(slug) as { id: number; venue_id: number }
+  const sat = ev('neon-harbor-empire-saturday')
+  const mega = ev('neon-harbor-megatour')
+  // assign a block of seats (section name, rows) to a new level
+  const level = (e: { id: number; venue_id: number }, name: string, color: string, cents: number, type: string, perks: string | null, section: string, rows: string[]) => {
+    const id = Number(db.prepare('INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type, perks) VALUES (?,?,?,?,?,?)').run(e.id, name, color, cents, type, perks).lastInsertRowid)
+    db.prepare(
+      `UPDATE inventory SET price_level_id = ? WHERE event_id = ? AND seat_id IN (SELECT st.id FROM seats st JOIN sections s ON s.id = st.section_id
+       WHERE s.venue_id = ? AND s.name = ? AND st.row IN (${rows.map(() => '?').join(',')}) AND st.accessible = 0 AND st.companion = 0)`,
+    ).run(id, e.id, e.venue_id, section, ...rows)
+    return id
+  }
+  // Platinum: $250 base, +300% at 100% sold and +50% at a full waiting room, never below $250 or above $900
+  const plat = level(sat, 'Platinum', '#eab308', 25000, 'platinum', 'Front rows, centre', '102', ['A', 'B'])
+  db.prepare('UPDATE price_levels SET dyn_min_cents = 25000, dyn_max_cents = 90000, dyn_k = 3, dyn_j = 0.5 WHERE id = ?').run(plat)
+  level(mega, 'Meet & Greet Package', '#f43f5e', 45000, 'vip', 'Meet the band, early entry, signed poster, commemorative laminate', '101', ['A', 'B'])
+  db.prepare('UPDATE events SET order_limit = 4, ticket_limit = 6 WHERE id = ?').run(mega.id)
+  for (const [name, pct] of [['child', 50], ['senior', 25], ['student', 20]] as const) {
+    db.prepare('INSERT INTO offers (event_id, name, pct_off) SELECT id, ?, ? FROM events').run(name, pct)
+  }
+  const addon = db.prepare('INSERT INTO addons (event_id, kind, name, price_cents, inventory) VALUES (?,?,?,?,?)')
+  addon.run(sat.id, 'parking', 'Lot A parking', 3000, 1)
+  addon.run(sat.id, 'merch', 'Tour T-shirt', 3500, 100)
+  addon.run(sat.id, 'hospitality', 'Club lounge access', 12000, 20)
+  const promo = db.prepare('INSERT INTO promo_codes (org_id, event_id, code, kind, amount, max_uses) VALUES (?,?,?,?,?,?)')
+  promo.run(null, null, 'STORM10', 'pct', 10, 1000) // platform-wide
+  promo.run(org, sat.id, 'FIVEOFF', 'fixed', 500, 100) // this event only
+}
+
 // 30 other fans already waiting for the megatour, so positions are visible (random order: it is still before on-sale).
 {
   const ev = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-megatour'").get() as { id: number }

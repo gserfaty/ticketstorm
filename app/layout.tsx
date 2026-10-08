@@ -5,9 +5,9 @@ import './globals.css'
 import { listCities } from '../lib/geo.ts'
 import { runJobsThrottled } from '../lib/jobs.ts'
 import { db } from '../lib/db.ts'
-import { getUser } from '../lib/session.ts'
+import { allInOn, getUser } from '../lib/session.ts'
 import SearchBox from '../components/SearchBox.tsx'
-import { setCity } from './actions.ts'
+import { setCity, toggleAllIn } from './actions.ts'
 
 export const metadata = { title: 'TicketStorm', description: 'Live events, tickets in a flash' }
 
@@ -16,6 +16,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const user = await getUser()
   const isMember = !!user && !!db.prepare('SELECT 1 FROM org_members WHERE user_id = ?').get(user.id)
   const city = (await cookies()).get('city')?.value ?? ''
+  const allIn = await allInOn()
   return (
     <html lang="en">
       <body>
@@ -32,6 +33,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
               ))}
             </select>
             <button>Set</button>
+          </form>
+          <form action={toggleAllIn} className="city">
+            <button title="Show prices with fees and tax included" aria-pressed={allIn}>{allIn ? 'All-in prices: on' : 'All-in prices: off'}</button>
           </form>
           <details className="account">
             <summary>{user ? user.name || user.email : 'Account'}</summary>

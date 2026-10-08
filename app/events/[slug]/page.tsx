@@ -3,9 +3,10 @@ import { notFound } from 'next/navigation'
 import Flash from '../../../components/Flash.tsx'
 import { openWindowIds } from '../../../lib/access.ts'
 import { db } from '../../../lib/db.ts'
-import { eventState, getEvent } from '../../../lib/events.ts'
+import { eventState, getEvent, orderLimit } from '../../../lib/events.ts'
 import { isSoldOut } from '../../../lib/inventory.ts'
-import { getSession, getUser } from '../../../lib/session.ts'
+import { displayLevels } from '../../../lib/pricing.ts'
+import { allInOn, getSession, getUser } from '../../../lib/session.ts'
 import { registerVerifiedFan, unlockPresale } from '../../access/actions.ts'
 import Heart from '../../../components/Heart.tsx'
 import { fmtDateTime, fmtDateTimeTz, money } from '../../../lib/format.ts'
@@ -22,8 +23,13 @@ export default async function EventPage({ params, searchParams }: { params: Prom
   const wins = (db.prepare('SELECT id, name, kind, starts_at, ends_at, requires_code, reg_starts, reg_ends, lottery_at FROM onsale_windows WHERE event_id = ? AND ends_at > ? ORDER BY starts_at').all(e!.id, nowIso) as Win[])
   const vfReg = (id: number) => user && (db.prepare('SELECT status FROM vf_registrations WHERE window_id = ? AND user_id = ?').get(id, user.id) as { status: string } | undefined)?.status
   const s = eventState(e!, Date.now(), isSoldOut(e!.id))
-  const { levels } = e!
-  const max = Math.min(e!.ticket_limit, 8)
+  const allIn = await allInOn()
+  const levels = displayLevels(e!.id, allIn)
+  const addons = db.prepare('SELECT kind, name, price_cents, inventory - sold AS left FROM addons WHERE event_id = ? ORDER BY id').all(e!.id) as { kind: string; name: string; price_cents: number; left: number }[]
+  const offers = db.prepare('SELECT name, pct_off FROM offers WHERE event_id = ? AND pct_off > 0 ORDER BY id').all(e!.id) as { name: string; pct_off: number }[]
+  const max = orderLimit(e!)
+  // an unlocked presale lets this session shop before the public on-sale
+  const presale = !!unlocked.length && s.label === 'Upcoming'
   const notOnSale = e!.status === 'published' || e!.status === 'rescheduled' ? e!.onsale_at && Date.parse(e!.onsale_at) > Date.now() : false
   return (
     <>
@@ -37,10 +43,13 @@ export default async function EventPage({ params, searchParams }: { params: Prom
       {e!.description && <p>{e!.description}</p>}
       {levels.length > 0 && (
         <>
-          <h2>Tickets {levels.length > 1 && <span className="muted">{money(levels[0].price_cents)} – {money(levels[levels.length - 1].price_cents)}</span>}</h2>
-          <ul>{levels.map((l) => <li key={l.id}>{l.name} ({l.ticket_type}) · {money(l.price_cents)}</li>)}</ul>
+          <h2>Tickets {levels.length > 1 && <span className="muted">{money(levels[0].cents)} – {money(levels[levels.length - 1].cents)}</span>}</h2>
+          <p className="muted">{allIn ? 'Prices include fees and tax (plus a per-order fee at checkout).' : 'Prices before fees and tax.'} Limit {max} per order, {e!.ticket_limit} per account.</p>
+          <ul>{levels.map((l) => <li key={l.id}>{l.name} ({l.ticket_type}) · {money(l.cents)}{l.perks && <div className="muted">Includes: {l.perks}</div>}</li>)}</ul>
         </>
       )}
+      {offers.length > 0 && <p className="muted">Discounted tickets at checkout: {offers.map((o) => `${o.name} ${o.pct_off}% off`).join(', ')}.</p>}
+      {addons.length > 0 && <p className="muted">Add-ons at checkout: {addons.map((a) => `${a.name} ${money(a.price_cents)}${a.left ? '' : ' (sold out)'}`).join(', ')}.</p>}
       {wins.map((w) => (
         <div className="card" key={w.id}>
           <strong>{w.name}</strong> <span className="muted">presale {fmtDateTime(w.starts_at, e!.tz)} to {fmtDateTime(w.ends_at, e!.tz)}</span>
@@ -66,12 +75,13 @@ export default async function EventPage({ params, searchParams }: { params: Prom
         </form>
       )}
       {e!.queue_enabled === 1 && <p><a href={`/queue/${e!.id}`}>Join the waiting room</a></p>}
-      {s.canBuy ? (
+      {presale && <p><strong>Public on sale {fmtDateTime(e!.onsale_at!, e!.tz)}</strong>. Your presale is open now.</p>}
+      {s.canBuy || presale ? (
         <form action={`/events/${e!.slug}/tickets`} className="buy">
-          <label>Quantity <select name="qty" defaultValue="2" aria-label="Quantity">
+          <label>Quantity <select name="qty" defaultValue={Math.min(2, max)} aria-label="Quantity">
             {Array.from({ length: max }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
           </select></label>
-          <button>Find tickets</button>
+          <button>{s.canBuy ? 'Find tickets' : 'Find presale tickets'}</button>
         </form>
       ) : notOnSale ? (
         <p><strong>On sale {fmtDateTime(e!.onsale_at!, e!.tz)}</strong></p>

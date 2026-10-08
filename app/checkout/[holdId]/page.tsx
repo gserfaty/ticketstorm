@@ -4,17 +4,17 @@ import { db } from '../../../lib/db.ts'
 import { newCaptcha } from '../../../lib/defense.ts'
 import { liveHold } from '../../../lib/orders.ts'
 import { listSavedCards } from '../../../lib/payments.ts'
-import { quote } from '../../../lib/pricing.ts'
+import { parseOptions, quote } from '../../../lib/pricing.ts'
 import { money, fmtDateTimeTz } from '../../../lib/format.ts'
 import { getSession, getUser } from '../../../lib/session.ts'
 import PayForm from '../../../components/PayForm.tsx'
-import { pay } from '../actions.ts'
+import { applyOptions, pay } from '../actions.ts'
 
 export const dynamic = 'force-dynamic'
 
-export default async function Checkout({ params, searchParams }: { params: Promise<{ holdId: string }>; searchParams: Promise<{ error?: string }> }) {
+export default async function Checkout({ params, searchParams }: { params: Promise<{ holdId: string }>; searchParams: Promise<{ error?: string; notice?: string }> }) {
   const holdId = Number((await params).holdId)
-  const { error } = await searchParams
+  const { error, notice } = await searchParams
   const session = await getSession()
   const hold = session && Number.isInteger(holdId) ? liveHold(holdId, session.token) : undefined
   if (!hold) {
@@ -30,6 +30,10 @@ export default async function Checkout({ params, searchParams }: { params: Promi
     title: string; slug: string; starts_at: string; venue: string; tz: string
   }
   const q = quote(hold.id)
+  const resale = q.lines.some((l) => l.listingId)
+  const offers = resale ? [] : (db.prepare('SELECT id, name, pct_off FROM offers WHERE event_id = ? AND pct_off > 0 ORDER BY pct_off').all(hold.event_id) as { id: number; name: string; pct_off: number }[])
+  const addons = resale ? [] : (db.prepare('SELECT id, kind, name, price_cents, inventory - sold AS left FROM addons WHERE event_id = ? ORDER BY id').all(hold.event_id) as { id: number; kind: string; name: string; price_cents: number; left: number }[])
+  const opts = parseOptions((db.prepare('SELECT options FROM holds WHERE id = ?').get(hold.id) as { options: string | null }).options)
   const user = await getUser()
   return (
     <>
@@ -37,17 +41,45 @@ export default async function Checkout({ params, searchParams }: { params: Promi
       <div className="card">
         <strong>{ev.title}</strong>
         <div className="muted">{ev.venue} · {fmtDateTimeTz(ev.starts_at, ev.tz)}</div>
-        <ul>{q.lines.map((l) => <li key={l.inventoryId}>{l.label} · {money(l.unit)} + {money(l.fee)} fees + {money(l.tax)} tax</li>)}</ul>
+        <ul>
+          {q.lines.map((l) => (
+            <li key={l.inventoryId}>{l.label}{l.offer ? ` · ${l.offer}` : ''} · {money(l.unit)} + {money(l.fee)} fees + {money(l.tax)} tax = <strong>{money(l.unit + l.fee + l.tax)}</strong> all-in</li>
+          ))}
+          {q.addons.map((a) => <li key={a.addonId}>{a.qty} × {a.name} · {money(a.unit)} each</li>)}
+        </ul>
         <table>
           <tbody>
-            <tr><td>Tickets</td><td>{money(q.subtotal)}</td></tr>
+            <tr><td>Tickets{q.addons.length ? ' and add-ons' : ''}</td><td>{money(q.subtotal)}</td></tr>
             <tr><td>Service and facility fees</td><td>{money(q.fees - q.orderFee)}</td></tr>
-            <tr><td>Order processing fee</td><td>{money(q.orderFee)}</td></tr>
+            <tr><td>Order processing and delivery</td><td>{money(q.orderFee)}</td></tr>
             <tr><td>Tax</td><td>{money(q.tax)}</td></tr>
+            {q.discount > 0 && <tr><td>Promo {q.promo?.code}</td><td>-{money(q.discount)}</td></tr>}
             <tr><td><strong>Total</strong></td><td><strong>{money(q.total)}</strong></td></tr>
           </tbody>
         </table>
       </div>
+      {!resale && (
+        <form action={applyOptions} className="card stack">
+          <input type="hidden" name="holdId" value={hold.id} />
+          <label>Promo code <input name="promo" defaultValue={opts.promo ?? ''} placeholder="e.g. STORM10" autoComplete="off" /></label>
+          {offers.length > 0 && q.lines.filter((l) => l.eventId === hold.event_id).map((l) => (
+            <label key={l.inventoryId}>{l.label}
+              <select name={`offer-${l.inventoryId}`} defaultValue={l.offerId ?? 0}>
+                <option value={0}>Standard</option>
+                {offers.map((o) => <option key={o.id} value={o.id}>{o.name} ({o.pct_off}% off)</option>)}
+              </select>
+            </label>
+          ))}
+          {addons.map((a) => (
+            <label key={a.id}>{a.name} {money(a.price_cents)} {a.left ? <span className="muted">({a.left} left)</span> : <strong>Sold out</strong>}
+              <input name={`addon-${a.id}`} type="number" min={0} max={Math.min(a.left, 8)} defaultValue={Math.min(opts.addons?.[a.id] ?? 0, a.left)} disabled={!a.left} />
+            </label>
+          ))}
+          <button>Update order</button>
+        </form>
+      )}
+      {notice && <p className="notice">{notice}</p>}
+      {q.promoError && <p className="error">{q.promoError}. Clear the promo code and update the order to continue.</p>}
       {error && <p className="error">{error}</p>}
       <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={user ? listSavedCards(user.id) : []} canSave={!!user} total={money(q.total)} captcha={newCaptcha()} />
       <p><Link href={`/events/${ev.slug}/tickets`}>Back to seat map</Link></p>

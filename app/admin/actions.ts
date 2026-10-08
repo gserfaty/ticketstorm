@@ -3,7 +3,8 @@
 import { redirect } from 'next/navigation'
 import { db, tx } from '../../lib/db.ts'
 import { refundEvent } from '../../lib/orders.ts'
-import { audit, setFlag } from '../../lib/platform.ts'
+import { audit, setFlag, UserError } from '../../lib/platform.ts'
+import { setCityTax, setFeeDefaults } from '../../lib/pricing.ts'
 import { requireAdmin } from '../../lib/session.ts'
 
 const text = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
@@ -70,6 +71,31 @@ export async function toggleFlag(f: FormData) {
   setFlag(key, f.get('enabled') === '1')
   audit(admin.id, 'flag.set', `flag:${key}`, { enabled: f.get('enabled') === '1' })
   done('/admin/flags', 'Updated')
+}
+
+// Platform fee defaults; an event's own fee_rule still overrides them field by field.
+export async function saveFeeDefaults(f: FormData) {
+  const admin = await requireAdmin()
+  try {
+    const rule = setFeeDefaults({ service_pct: f.get('service_pct'), facility_cents: f.get('facility_cents'), order_cents: f.get('order_cents'), delivery_cents: f.get('delivery_cents') })
+    audit(admin.id, 'fees.defaults', 'settings:fee_defaults', rule)
+  } catch (e) {
+    if (e instanceof UserError) refuse('/admin/fees', e.message)
+    throw e
+  }
+  done('/admin/fees', 'Fee defaults saved')
+}
+
+export async function saveCityTax(f: FormData) {
+  const admin = await requireAdmin()
+  const id = num(f, 'cityId')
+  try {
+    audit(admin.id, 'tax.set', `city:${id}`, { bps: setCityTax(id, f.get('bps')) })
+  } catch (e) {
+    if (e instanceof UserError) refuse('/admin/taxes', e.message)
+    throw e
+  }
+  done('/admin/taxes', 'Tax rate saved')
 }
 
 // Re-run the (idempotent) event refund: only orders whose refund failed are touched.

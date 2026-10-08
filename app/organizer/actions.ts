@@ -108,7 +108,7 @@ export async function changeDate(f: FormData) {
 
 export async function addLevel(f: FormData) {
   const e = await authEvent(f)
-  run(e.back, () => { org.addLevel(e.id, text(f, 'name'), text(f, 'price'), text(f, 'type'), text(f, 'color')); audit(e.user.id, 'level.add', `event:${e.id}`) })
+  run(e.back, () => { org.addLevel(e.id, text(f, 'name'), text(f, 'price'), text(f, 'type'), text(f, 'color'), text(f, 'perks')); audit(e.user.id, 'level.add', `event:${e.id}`) })
 }
 
 export async function removeLevel(f: FormData) {
@@ -123,7 +123,48 @@ export async function repriceLevel(f: FormData) {
 
 export async function saveFees(f: FormData) {
   const e = await authEvent(f)
-  run(e.back, () => { org.setFees(e.id, { service_pct: f.get('service_pct'), facility_cents: f.get('facility_cents'), order_cents: f.get('order_cents') }); audit(e.user.id, 'fees.set', `event:${e.id}`) })
+  run(e.back, () => { org.setFees(e.id, { service_pct: f.get('service_pct'), facility_cents: f.get('facility_cents'), order_cents: f.get('order_cents'), delivery_cents: f.get('delivery_cents') }); audit(e.user.id, 'fees.set', `event:${e.id}`) })
+}
+
+export async function saveDynamic(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { org.setDynamic(e.id, num(f, 'levelId'), { min: text(f, 'min'), max: text(f, 'max'), k: text(f, 'k'), j: text(f, 'j') }); audit(e.user.id, 'level.dynamic', `event:${e.id}`, { levelId: num(f, 'levelId'), min: text(f, 'min'), max: text(f, 'max'), k: text(f, 'k'), j: text(f, 'j') }) })
+}
+
+export async function saveLimits(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { org.setLimits(e.id, f.get('order_limit'), f.get('ticket_limit')); audit(e.user.id, 'limits.set', `event:${e.id}`, { order: text(f, 'order_limit'), event: text(f, 'ticket_limit') }) })
+}
+
+// Promo codes: org_id comes from the event row, so a manager can only create and delete codes for their own org.
+export async function addPromoAction(f: FormData) {
+  const e = await authEvent(f)
+  const exp = text(f, 'expiresAt')
+  run(e.back, () => {
+    if (exp && !parseLocal(exp, e.tz)) throw new UserError('Enter a valid expiry')
+    org.addPromo(e.org_id, e.id, { code: text(f, 'code'), kind: text(f, 'kind'), amount: text(f, 'amount'), maxUses: f.get('maxUses'), expiresAt: exp ? parseLocal(exp, e.tz) : null, wholeOrg: f.get('scope') === 'org' })
+    audit(e.user.id, 'promo.add', `event:${e.id}`, { code: text(f, 'code') })
+  })
+}
+
+export async function removePromoAction(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { org.removePromo(e.org_id, num(f, 'promoId')); audit(e.user.id, 'promo.remove', `event:${e.id}`, { promoId: num(f, 'promoId') }) })
+}
+
+export async function saveOffer(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { org.setOffer(e.id, text(f, 'name'), f.get('pct')); audit(e.user.id, 'offer.set', `event:${e.id}`, { name: text(f, 'name'), pct: text(f, 'pct') }) })
+}
+
+export async function addAddonAction(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { org.addAddon(e.id, text(f, 'kind'), text(f, 'name'), text(f, 'price'), f.get('inventory')); audit(e.user.id, 'addon.add', `event:${e.id}`, { name: text(f, 'name') }) })
+}
+
+export async function removeAddonAction(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { org.removeAddon(e.id, num(f, 'addonId')); audit(e.user.id, 'addon.remove', `event:${e.id}`, { addonId: num(f, 'addonId') }) })
 }
 
 export async function saveOnsale(f: FormData) {

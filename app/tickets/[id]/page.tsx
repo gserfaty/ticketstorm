@@ -19,7 +19,7 @@ export default async function Ticket({ params, searchParams }: { params: Promise
   const mine = !!user && t!.owner_id === user.id
   const now = new Date().toISOString()
   // controls only for the owner, only while the ticket is live and the show is ahead; the server re-checks every action
-  const open = mine && t!.starts_at > now
+  const open = mine && t!.starts_at > now && !t!.addon // passes can't be transferred or resold
   const pending = open ? (db.prepare("SELECT id, to_email, to_phone FROM transfers WHERE ticket_id = ? AND status = 'pending' AND expires_at > ?").get(id, now) as { id: number; to_email: string | null; to_phone: string | null } | undefined) : undefined
   const listing = open ? (db.prepare("SELECT id, price_cents FROM listings WHERE ticket_id = ? AND status = 'active'").get(id) as { id: number; price_cents: number } | undefined) : undefined
   return (
@@ -28,7 +28,7 @@ export default async function Ticket({ params, searchParams }: { params: Promise
       {error && <p className="error">{error}</p>}
       {notice && <p className="notice">{notice}</p>}
       <p>{t!.venue} · {fmtDateTimeTz(t!.starts_at, t!.tz)}</p>
-      <p>{t!.row ? `Section ${t!.section} Row ${t!.row} Seat ${t!.number}` : `General admission ${t!.section}`} · <span className="badge">{t!.status}</span></p>
+      <p>{t!.addon ? `${t!.addon} pass` : t!.row ? `Section ${t!.section} Row ${t!.row} Seat ${t!.number}` : `General admission ${t!.section}`} · <span className="badge">{t!.status}</span></p>
       {t!.status === 'valid' ? <TicketQR ticketId={t!.id} secret={t!.secret} /> : <p>This ticket is {t!.status} and cannot be scanned.</p>}
       {open && t!.status === 'valid' && pending && (
         <div className="card">

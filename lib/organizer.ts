@@ -120,13 +120,14 @@ export function changeDate(eventId: number, kind: 'postponed' | 'rescheduled', n
 }
 
 // ---- pricing ----
-export function addLevel(eventId: number, name: string, dollars: string, type: string, color: string) {
+export function addLevel(eventId: number, name: string, dollars: string, type: string, color: string, perks = '') {
+  if (perks.length > 300) throw new UserError('Perks text is limited to 300 characters')
   if (!name || name.length > 40) throw new UserError('Level name required')
   if (!TYPES.includes(type)) throw new UserError('Unknown ticket type')
   const cents = Math.round(Number(dollars) * 100)
   if (!Number.isFinite(cents) || cents < 0 || cents > 10_000_000) throw new UserError('Enter a price')
   if (db.prepare('SELECT 1 FROM price_levels WHERE event_id = ? AND name = ?').get(eventId, name)) throw new UserError('A level with that name exists')
-  db.prepare('INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type) VALUES (?,?,?,?,?)').run(eventId, name, /^#[0-9a-f]{6}$/i.test(color) ? color : '#3b82f6', cents, type)
+  db.prepare('INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type, perks) VALUES (?,?,?,?,?,?)').run(eventId, name, /^#[0-9a-f]{6}$/i.test(color) ? color : '#3b82f6', cents, type, perks || null)
 }
 
 export function removeLevel(eventId: number, levelId: number) {
@@ -144,9 +145,83 @@ export function repriceLevel(eventId: number, levelId: number, dollars: string) 
   if (!r.changes) throw new UserError('Level has held or sold tickets; its price is locked')
 }
 
-export function setFees(eventId: number, f: { service_pct: unknown; facility_cents: unknown; order_cents: unknown }) {
-  const rule = { service_pct: int(f.service_pct, 0, 50, 'Service fee %'), facility_cents: int(f.facility_cents, 0, 100_000, 'Facility charge (cents)'), order_cents: int(f.order_cents, 0, 100_000, 'Order fee (cents)') }
+export function setFees(eventId: number, f: { service_pct: unknown; facility_cents: unknown; order_cents: unknown; delivery_cents: unknown }) {
+  const rule = { service_pct: int(f.service_pct, 0, 50, 'Service fee %'), facility_cents: int(f.facility_cents, 0, 100_000, 'Facility charge (cents)'), order_cents: int(f.order_cents, 0, 100_000, 'Order fee (cents)'), delivery_cents: int(f.delivery_cents, 0, 100_000, 'Delivery fee (cents)') }
   db.prepare('UPDATE events SET fee_rule = ? WHERE id = ?').run(JSON.stringify(rule), eventId)
+}
+
+// Dynamic / platinum pricing: price = clamp(base * (1 + k * sold% + j * queue factor), min, max). Blank min, max and k and j = fixed price.
+// Only affects tickets held from now on: a held ticket keeps the face price it was locked at.
+export function setDynamic(eventId: number, levelId: number, f: { min: string; max: string; k: string; j: string }) {
+  const cents = (v: string, what: string) => {
+    const n = Math.round(Number(v) * 100)
+    if (!Number.isFinite(n) || n < 0 || n > 10_000_000) throw new UserError(`${what} must be a price`)
+    return n
+  }
+  const factor = (v: string, what: string) => {
+    const n = v === '' ? 0 : Number(v)
+    if (!Number.isFinite(n) || n < 0 || n > 10) throw new UserError(`${what} must be a number from 0 to 10`)
+    return n
+  }
+  const lv = db.prepare('SELECT price_cents FROM price_levels WHERE id = ? AND event_id = ? AND event_ids IS NULL').get(levelId, eventId) as { price_cents: number } | undefined
+  if (!lv) throw new UserError('Level not found')
+  const k = factor(f.k, 'k')
+  const j = factor(f.j, 'j')
+  const min = f.min === '' ? null : cents(f.min, 'Minimum')
+  const max = f.max === '' ? null : cents(f.max, 'Maximum')
+  if ((k > 0 || j > 0) && max === null) throw new UserError('Set a maximum price for a dynamic level')
+  if (min !== null && max !== null && min > max) throw new UserError('Minimum must not be above the maximum')
+  db.prepare('UPDATE price_levels SET dyn_min_cents = ?, dyn_max_cents = ?, dyn_k = ?, dyn_j = ? WHERE id = ?').run(min, max, k || null, j || null, levelId)
+}
+
+// Per-order cap and per-event (per account, across orders) cap.
+export function setLimits(eventId: number, perOrder: unknown, perEvent: unknown) {
+  const o = int(perOrder, 1, 100, 'Per-order limit')
+  const e = int(perEvent, 1, 100, 'Per-event limit')
+  if (o > e) throw new UserError('The per-order limit cannot exceed the per-event limit')
+  db.prepare('UPDATE events SET order_limit = ?, ticket_limit = ? WHERE id = ?').run(o, e, eventId)
+}
+
+// ---- promo codes (org-scoped: the org is read from the event row by the caller) ----
+export type PromoForm = { code: string; kind: string; amount: string; maxUses: unknown; expiresAt: string | null; wholeOrg: boolean }
+export function addPromo(orgId: number, eventId: number, f: PromoForm) {
+  if (!/^[A-Za-z0-9_-]{3,20}$/.test(f.code)) throw new UserError('Code: 3 to 20 letters, digits, - or _')
+  if (!['pct', 'fixed'].includes(f.kind)) throw new UserError('Pick percent or fixed')
+  const amount = f.kind === 'pct' ? int(f.amount, 1, 100, 'Percent off') : Math.round(Number(f.amount) * 100)
+  if (!Number.isInteger(amount) || amount < 1 || amount > 10_000_000) throw new UserError('Enter an amount')
+  const maxUses = int(f.maxUses, 1, 1_000_000, 'Max uses')
+  try {
+    db.prepare('INSERT INTO promo_codes (org_id, event_id, code, kind, amount, max_uses, expires_at) VALUES (?,?,?,?,?,?,?)').run(orgId, f.wholeOrg ? null : eventId, f.code, f.kind, amount, maxUses, f.expiresAt)
+  } catch (e) {
+    if (String(e).includes('UNIQUE')) throw new UserError('That code already exists')
+    throw e
+  }
+}
+
+export function removePromo(orgId: number, promoId: number) {
+  db.prepare('DELETE FROM promo_codes WHERE id = ? AND org_id = ?').run(promoId, orgId)
+}
+
+// ---- offers (child / senior / student % off per ticket; 0 removes) and add-ons ----
+export function setOffer(eventId: number, name: string, pct: unknown) {
+  if (!['child', 'senior', 'student'].includes(name)) throw new UserError('Unknown offer')
+  const n = int(pct, 0, 100, 'Percent off')
+  if (n === 0) db.prepare('DELETE FROM offers WHERE event_id = ? AND name = ?').run(eventId, name)
+  else db.prepare('INSERT INTO offers (event_id, name, pct_off) VALUES (?,?,?) ON CONFLICT(event_id, name) DO UPDATE SET pct_off = excluded.pct_off').run(eventId, name, n)
+}
+
+export const ADDON_KINDS = ['parking', 'merch', 'hospitality']
+export function addAddon(eventId: number, kind: string, name: string, dollars: string, inventory: unknown) {
+  if (!ADDON_KINDS.includes(kind)) throw new UserError('Pick parking, merch or hospitality')
+  if (!name || name.length > 60) throw new UserError('Add-on name required')
+  const cents = Math.round(Number(dollars) * 100)
+  if (!Number.isFinite(cents) || cents < 0 || cents > 10_000_000) throw new UserError('Enter a price')
+  db.prepare('INSERT INTO addons (event_id, kind, name, price_cents, inventory) VALUES (?,?,?,?,?)').run(eventId, kind, name, cents, int(inventory, 0, 100_000, 'Inventory'))
+}
+
+export function removeAddon(eventId: number, addonId: number) {
+  const r = db.prepare('DELETE FROM addons WHERE id = ? AND event_id = ? AND sold = 0').run(addonId, eventId)
+  if (!r.changes) throw new UserError('Add-ons that have sold cannot be removed');
 }
 
 export function setOnsale(eventId: number, iso: string | null) {

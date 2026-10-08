@@ -107,6 +107,11 @@ export async function login(userId: number) {
   await setCookie(token)
 }
 
+// All-in pricing toggle (cookie): fans see face + fees + tax per ticket instead of face value.
+export async function allInOn(): Promise<boolean> {
+  return (await cookies()).get('allin')?.value === '1'
+}
+
 export async function logout() {
   const token = (await cookies()).get(COOKIE)?.value
   if (token) db.prepare('DELETE FROM sessions WHERE token = ?').run(token)

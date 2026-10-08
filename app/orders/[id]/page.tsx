@@ -19,6 +19,11 @@ export default async function Order({ params, searchParams }: { params: Promise<
        JOIN tickets tk ON tk.id = (SELECT min(id) FROM tickets WHERE order_id = oi.order_id AND inventory_id = oi.inventory_id) WHERE oi.order_id = ? ORDER BY oi.id`,
     )
     .all(id) as { unit_cents: number; fee_cents: number; tax_cents: number; ticket_id: number; status: string; section: string; row: string | null; number: number | null }[]
+  const addons = db
+    .prepare("SELECT a.name, count(*) AS n, sum(oi.unit_cents) AS total FROM order_items oi JOIN addons a ON a.id = oi.addon_id WHERE oi.order_id = ? AND oi.kind = 'addon' GROUP BY a.id ORDER BY a.id")
+    .all(id) as { name: string; n: number; total: number }[]
+  const passes = db.prepare('SELECT t.id, t.status, a.name FROM tickets t JOIN addons a ON a.id = t.addon_id WHERE t.order_id = ? ORDER BY t.id').all(id) as { id: number; status: string; name: string }[]
+  const promo = o!.discount > 0 ? (db.prepare('SELECT p.code FROM orders o JOIN promo_codes p ON p.id = o.promo_id WHERE o.id = ?').get(id) as { code: string } | undefined)?.code : undefined
   const orderFee = (db.prepare("SELECT coalesce(sum(fee_cents), 0) AS f FROM order_items WHERE order_id = ? AND kind = 'fee'").get(id) as { f: number }).f
   const suffix = t ? `?t=${encodeURIComponent(t)}` : ''
   return (
@@ -34,13 +39,16 @@ export default async function Order({ params, searchParams }: { params: Promise<
               <Link href={`/tickets/${i.ticket_id}${suffix}`}>View ticket</Link>
             </li>
           ))}
-          {orderFee > 0 && <li>Order processing fee · {money(orderFee)}</li>}
+          {addons.map((a) => <li key={a.name}>{a.n} × {a.name} · {money(a.total)}</li>)}
+          {passes.map((p) => <li key={p.id}>{p.name} pass · {p.status} <Link href={`/tickets/${p.id}${suffix}`}>View pass</Link></li>)}
+          {orderFee > 0 && <li>Order processing and delivery fees · {money(orderFee)}</li>}
         </ul>
         <table>
           <tbody>
-            <tr><td>Tickets</td><td>{money(o!.subtotal)}</td></tr>
+            <tr><td>Tickets{addons.length ? ' and add-ons' : ''}</td><td>{money(o!.subtotal)}</td></tr>
             <tr><td>Fees</td><td>{money(o!.fees)}</td></tr>
             <tr><td>Tax</td><td>{money(o!.tax)}</td></tr>
+            {o!.discount > 0 && <tr><td>Promo {promo}</td><td>-{money(o!.discount)}</td></tr>}
             <tr><td><strong>Total</strong></td><td><strong>{money(o!.total)}</strong></td></tr>
           </tbody>
         </table>

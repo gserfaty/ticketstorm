@@ -24,6 +24,9 @@ export type PayInput = {
 }
 export type PayResult = { orderId: number } | { declined: string } | { threeDs: number }
 
+// add-on kinds that get a scannable pass
+export const PASS_KINDS = ['parking', 'hospitality']
+
 type Meta = Pick<PayInput, 'userId' | 'email' | 'exp' | 'save' | 'billing'>
 
 // The session's active, unexpired hold, or undefined. Ownership is the session token, never a user-supplied id alone.
@@ -50,6 +53,7 @@ export function finalize(i: PayInput): PayResult {
     if (!hold) throw new HoldError('Your hold expired or is not yours', 410)
     const q = quote(i.holdId)
     if (!q.lines.length) throw new HoldError('Nothing to buy', 410)
+    if (q.promoError) throw new HoldError(q.promoError, 409)
     assertTicketLimit(i.userId, hold.event_id, q.lines.length, i.sessionToken, i.email)
     const meta: Meta = { userId: i.userId, email: i.email, exp: i.exp, save: i.save, billing: i.billing }
     const { payment } = recordCharge({ key: i.key, holdId: i.holdId, sessionToken: i.sessionToken, amount: q.total, method: i.method, brand: i.brand, last4: i.last4, meta })
@@ -64,6 +68,7 @@ function createOrder(p: Payment): number {
   if (!hold) throw new HoldError('Your hold expired', 410)
   const q = quote(hold.id)
   if (!q.lines.length || q.total !== p.amount) throw new HoldError('Price changed', 409)
+  if (q.promoError) throw new HoldError(q.promoError, 409)
   const m = JSON.parse(p.meta!) as Meta
 
   // Resale hold: the seat is already sold; settle the listing (seller ticket 'resold', ledger credit) so the buyer's new ticket can be inserted below.
@@ -75,20 +80,38 @@ function createOrder(p: Payment): number {
     if (sold.changes !== q.lines.length) throw new HoldError('Your tickets are no longer held', 409)
   }
 
+  // Add-ons: one guarded UPDATE per add-on, so two buyers can never oversell the last one (a miss rolls the whole order, charge included, back).
+  for (const a of q.addons) {
+    if (db.prepare('UPDATE addons SET sold = sold + ? WHERE id = ? AND sold + ? <= inventory').run(a.qty, a.addonId, a.qty).changes !== 1) throw new HoldError(`${a.name} is sold out`, 409)
+  }
+  // Promo: the use is taken here, in the order's tx, only while uses < max_uses (and unexpired).
+  if (q.promo && db.prepare('UPDATE promo_codes SET uses = uses + 1 WHERE id = ? AND uses < max_uses AND (expires_at IS NULL OR expires_at > ?)').run(q.promo.id, now).changes !== 1) {
+    throw new HoldError('This promo code is no longer valid', 409)
+  }
+
   const accessToken = randomBytes(16).toString('hex')
   const order = db
     .prepare(
-      `INSERT INTO orders (user_id, session_token, access_token, email, event_id, hold_id, status, subtotal, fees, tax, total, idempotency_key)
-       VALUES (?,?,?,?,?,?, 'paid', ?,?,?,?,?) RETURNING id`,
+      `INSERT INTO orders (user_id, session_token, access_token, email, event_id, hold_id, status, subtotal, fees, tax, discount, promo_id, total, idempotency_key)
+       VALUES (?,?,?,?,?,?, 'paid', ?,?,?,?,?,?,?) RETURNING id`,
     )
-    .get(m.userId, p.session_token, accessToken, m.email, hold.event_id, hold.id, q.subtotal, q.fees, q.tax, q.total, p.idempotency_key) as { id: number }
-  const item = db.prepare("INSERT INTO order_items (order_id, kind, inventory_id, unit_cents, fee_cents, tax_cents) VALUES (?, 'ticket', ?,?,?,?)")
+    .get(m.userId, p.session_token, accessToken, m.email, hold.event_id, hold.id, q.subtotal, q.fees, q.tax, q.discount, q.promo?.id ?? null, q.total, p.idempotency_key) as { id: number }
+  const item = db.prepare("INSERT INTO order_items (order_id, kind, inventory_id, offer_id, unit_cents, fee_cents, tax_cents) VALUES (?, 'ticket', ?,?,?,?,?)")
   const ticket = db.prepare('INSERT INTO tickets (order_id, inventory_id, owner_id, secret) VALUES (?,?,?,?)')
   for (const l of q.lines) {
-    item.run(order.id, l.inventoryId, l.unit, l.fee, l.tax)
+    item.run(order.id, l.inventoryId, l.offerId ?? null, l.unit, l.fee, l.tax)
     ticket.run(order.id, l.inventoryId, m.userId, randomBytes(32).toString('hex'))
   }
-  // per-order processing fee as its own line, so sum(items) == total
+  // Add-on units: one item per unit. Parking and hospitality units also get a pass: a ticket with no seat (inventory_id NULL, addon_id set),
+  // so it has its own secret and SafeTix QR and is scanned like any ticket. one_live_ticket ignores NULL inventory_id.
+  for (const a of q.addons) {
+    for (let n = 0; n < a.qty; n++) {
+      db.prepare("INSERT INTO order_items (order_id, kind, addon_id, unit_cents) VALUES (?, 'addon', ?, ?)").run(order.id, a.addonId, a.unit)
+      if (PASS_KINDS.includes(a.kind)) db.prepare('INSERT INTO tickets (order_id, addon_id, owner_id, secret) VALUES (?,?,?,?)').run(order.id, a.addonId, m.userId, randomBytes(32).toString('hex'))
+    }
+  }
+  // the promo discount is its own (negative) line, and so is the per-order fee, so sum(items) == total
+  if (q.discount) db.prepare("INSERT INTO order_items (order_id, kind, unit_cents) VALUES (?, 'discount', ?)").run(order.id, -q.discount)
   db.prepare("INSERT INTO order_items (order_id, kind, unit_cents, fee_cents, tax_cents) VALUES (?, 'fee', 0, ?, 0)").run(order.id, q.orderFee)
   db.prepare('UPDATE payments SET order_id = ? WHERE id = ?').run(order.id, p.id)
   db.prepare("UPDATE holds SET status = 'converted' WHERE id = ?").run(hold.id)
@@ -141,7 +164,7 @@ export function getOrder(id: number, v: Viewer) {
     .prepare(
       `SELECT o.*, e.title, e.slug, e.starts_at, v.name AS venue, v.tz FROM orders o JOIN events e ON e.id = o.event_id JOIN venues v ON v.id = e.venue_id WHERE o.id = ?`,
     )
-    .get(id) as (Owned & { id: number; email: string; status: string; subtotal: number; fees: number; tax: number; total: number; created_at: string; title: string; slug: string; starts_at: string; venue: string; tz: string }) | undefined
+    .get(id) as (Owned & { id: number; email: string; status: string; subtotal: number; fees: number; tax: number; discount: number; total: number; created_at: string; title: string; slug: string; starts_at: string; venue: string; tz: string }) | undefined
   return o && canViewOrder(o, v) ? o : undefined
 }
 
@@ -150,11 +173,12 @@ export function getTicket(id: number, v: Viewer) {
   const t = db
     .prepare(
       `SELECT t.id, t.status, t.secret, t.owner_id, t.order_id, o.user_id, o.session_token, o.access_token, e.title, e.starts_at, v.name AS venue, v.tz,
-         s.name AS section, st.row, st.number
-       FROM tickets t JOIN orders o ON o.id = t.order_id JOIN inventory i ON i.id = t.inventory_id JOIN events e ON e.id = i.event_id
-       JOIN venues v ON v.id = e.venue_id JOIN sections s ON s.id = i.section_id LEFT JOIN seats st ON st.id = i.seat_id WHERE t.id = ?`,
+         s.name AS section, st.row, st.number, a.name AS addon
+       FROM tickets t JOIN orders o ON o.id = t.order_id LEFT JOIN inventory i ON i.id = t.inventory_id LEFT JOIN addons a ON a.id = t.addon_id
+       JOIN events e ON e.id = coalesce(i.event_id, a.event_id) JOIN venues v ON v.id = e.venue_id
+       LEFT JOIN sections s ON s.id = i.section_id LEFT JOIN seats st ON st.id = i.seat_id WHERE t.id = ?`,
     )
-    .get(id) as (Owned & { id: number; status: string; secret: string; owner_id: number | null; order_id: number; title: string; starts_at: string; venue: string; tz: string; section: string; row: string | null; number: number | null }) | undefined
+    .get(id) as (Owned & { id: number; status: string; secret: string; owner_id: number | null; order_id: number; title: string; starts_at: string; venue: string; tz: string; section: string | null; row: string | null; number: number | null; addon: string | null }) | undefined
   if (!t) return undefined
   const ok = t.owner_id !== null ? v.userId === t.owner_id : canViewOrder({ ...t, user_id: null }, v)
   return ok ? t : undefined

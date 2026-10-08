@@ -10,7 +10,7 @@ const { db } = await import('../lib/db.ts')
 const inv = await import('../lib/inventory.ts')
 const { finalize, approve3ds, canViewOrder } = await import('../lib/orders.ts')
 const pay = await import('../lib/payments.ts')
-const { price } = await import('../lib/pricing.ts')
+const { price, setCheckoutOptions } = await import('../lib/pricing.ts')
 test.after(() => rmSync(dir, { recursive: true, force: true }))
 
 const run = (sql: string, ...a: (string | number | null)[]) => Number(db.prepare(sql).run(...a).lastInsertRowid)
@@ -59,8 +59,8 @@ test('success creates order, sold inventory, tickets; same key charges once', ()
   assert.equal(db.prepare("SELECT count(*) AS n FROM payments WHERE idempotency_key = 'idem-same-key'").get()!.n, 1)
   assert.equal(db.prepare('SELECT count(*) AS n FROM tickets WHERE order_id = ?').get((r as { orderId: number }).orderId)!.n, 2)
   assert.equal(db.prepare("SELECT count(*) AS n FROM inventory WHERE hold_id = ? AND status = 'sold'").get(h)!.n, 2)
-  const o = db.prepare('SELECT subtotal, fees, tax, total FROM orders WHERE id = ?').get((r as { orderId: number }).orderId) as { subtotal: number; fees: number; tax: number; total: number }
-  assert.equal(o.total, o.subtotal + o.fees + o.tax)
+  const o = db.prepare('SELECT subtotal, fees, tax, discount, total FROM orders WHERE id = ?').get((r as { orderId: number }).orderId) as { subtotal: number; fees: number; tax: number; discount: number; total: number }
+  assert.equal(o.total, o.subtotal + o.fees + o.tax - o.discount)
   assert.equal(o.total, (db.prepare('SELECT sum(unit_cents + fee_cents + tax_cents) AS s FROM order_items WHERE order_id = ?').get((r as { orderId: number }).orderId) as { s: number }).s)
   // a different session cannot replay someone else's key
   assert.throws(() => finalize(input(h, 's2', '4242', 'idem-same-key')))
@@ -109,4 +109,26 @@ test('order authorization', () => {
   assert.ok(canViewOrder(o, { userId: null, sessionToken: null, token: 'tok-abc' }))
   assert.ok(!canViewOrder(o, { userId: 5, sessionToken: 'other', token: 'nope' }))
   assert.ok(!canViewOrder({ ...o, user_id: 1 }, { userId: 2, sessionToken: 'sess', token: 'tok-abc' }))
+})
+
+test('promo + add-on + 3DS: the order matches the amount charged, items sum to the total, the promo is used once', () => {
+  const addon = Number(db.prepare("INSERT INTO addons (event_id, kind, name, price_cents, inventory) VALUES (?, 'parking', 'Lot', 2000, 5)").run(ev).lastInsertRowid)
+  db.prepare("INSERT INTO promo_codes (code, kind, amount, max_uses) VALUES ('PAY10', 'pct', 10, 5)").run()
+  const h = hold('s7')
+  setCheckoutOptions(h, 's7', { promo: 'pay10', offers: {}, addons: { [addon]: 2 } })
+  const r = finalize({ ...input(h, 's7', '3220'), email: 'p8@x.test' }) as { threeDs: number }
+  const charged = (db.prepare('SELECT amount FROM payments WHERE id = ?').get(r.threeDs) as { amount: number }).amount
+  const { orderId } = approve3ds(r.threeDs, 's7') as { orderId: number }
+  const o = db.prepare('SELECT subtotal, fees, tax, discount, total FROM orders WHERE id = ?').get(orderId) as { subtotal: number; fees: number; tax: number; discount: number; total: number }
+  assert.equal(o.total, charged)
+  assert.equal(o.total, o.subtotal + o.fees + o.tax - o.discount)
+  assert.equal(o.discount, 1000) // 10% of 2 x $50.00 tickets (not of the add-on)
+  assert.equal((db.prepare('SELECT sum(unit_cents + fee_cents + tax_cents) AS s FROM order_items WHERE order_id = ?').get(orderId) as { s: number }).s, o.total)
+  assert.equal((db.prepare("SELECT uses FROM promo_codes WHERE code = 'PAY10'").get() as { uses: number }).uses, 1)
+  assert.equal((db.prepare('SELECT sold FROM addons WHERE id = ?').get(addon) as { sold: number }).sold, 2)
+  // changing the options after the charge but before approval makes the amounts disagree: refused, nothing created
+  const h2 = hold('s8')
+  const r2 = finalize({ ...input(h2, 's8', '3220'), email: 'p8b@x.test' }) as { threeDs: number }
+  setCheckoutOptions(h2, 's8', { promo: 'PAY10', offers: {}, addons: {} })
+  assert.throws(() => approve3ds(r2.threeDs, 's8'), /Price changed/)
 })

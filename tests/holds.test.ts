@@ -100,7 +100,7 @@ test('ticket_limit cap, replace-own-hold, all-or-nothing on partial conflict', (
   assert.throws(() => inv.holdSeats(ev, owner('C'), [ids[1], ids[0]]), inv.HoldError)
   assert.equal((db.prepare("SELECT status FROM inventory WHERE id = ?").get(ids[1]) as { status: string }).status, 'available')
   const h1 = inv.holdSeats(ev, owner('C'), [ids[1]])
-  const h2 = inv.holdSeats(ev, owner('C'), [ids[2]]) // replaces h1
+  const h2 = inv.holdSeats(ev, owner('C'), [ids[4]]) // replaces h1 (seat 3 would strand seat 2 beside D's seat 1)
   assert.equal((db.prepare("SELECT status FROM inventory WHERE id = ?").get(ids[1]) as { status: string }).status, 'available')
   assert.equal((db.prepare('SELECT status FROM holds WHERE id = ?').get(h1.holdId) as { status: string }).status, 'released')
   assert.ok(h2.holdId > h1.holdId)
