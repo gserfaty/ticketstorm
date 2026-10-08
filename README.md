@@ -1,8 +1,13 @@
 # TicketStorm
 
-A Ticketmaster clone: Next.js 15 + React 19 + TypeScript + SQLite (`node:sqlite`). No ORM, no DB server. See `docs/plan.md`.
+A Ticketmaster clone for learning and demo: Next.js 15 (App Router) + React 19 + TypeScript + SQLite via Node's built-in `node:sqlite`. No ORM, no database server, no external services. Payments, email, SMS and push are all simulated locally.
 
-Requires Node >= 23.6 (type stripping + `node:sqlite`).
+Phases P1 to P7 of [docs/plan.md](docs/plan.md) are implemented. Design details are in [ARCHITECTURE.md](ARCHITECTURE.md), history in [CHANGELOG.md](CHANGELOG.md), the feature inventory that drives the plan in [docs/research.md](docs/research.md).
+
+## Requirements
+
+- Node.js >= 23.6 (native TypeScript type stripping and `node:sqlite`; an ExperimentalWarning is expected and harmless)
+- npm
 
 ## Setup
 
@@ -12,9 +17,17 @@ npm run reset     # delete data/ticketstorm.db* and seed it
 npm run dev       # http://localhost:3000
 ```
 
-Other scripts: `npm run seed`, `npm run jobs`, `npm test`, `npm run typecheck`, `npm run build`.
+## npm scripts
 
-Emails and SMS are simulated: open `/dev/outbox` for verify and reset links.
+| Script | What it does |
+|---|---|
+| `npm run dev` | Next dev server |
+| `npm run build` / `npm start` | Production build / server |
+| `npm run seed` | Seed the DB (no-op if users already exist) |
+| `npm run reset` | `rm -f data/ticketstorm.db*` then seed. Use after any `lib/schema.sql` change |
+| `npm run jobs` | Run housekeeping once (`runJobs()`): expiry tidy-up, Verified Fan lottery and waitlist promotion |
+| `npm test` | `node --test "tests/**/*.test.ts"` (temp DBs, never `data/`) |
+| `npm run typecheck` | `tsc --noEmit` |
 
 ## Seed accounts
 
@@ -22,30 +35,71 @@ Password for all: `password123`
 
 | Email | Role |
 |---|---|
-| `fan@ticketstorm.test` | fan |
-| `fan2@ticketstorm.test` | fan |
+| `fan@ticketstorm.test` | fan (has a paid order for 2 seats) |
+| `fan2@ticketstorm.test` | fan (has one ticket listed for resale) |
 | `organizer@ticketstorm.test` | owner of org "Storm Live" |
 | `scanner@ticketstorm.test` | scanner in "Storm Live" |
 | `admin@ticketstorm.test` | platform admin |
 
-Seed data: 12 cities, 8 venues, 30 artists, 83 events (80 upcoming over the next 120 days, 3 past).
+Seed data (deterministic, `scripts/seed.ts`): 12 cities with tax rates, 9 venues generated in 5 layouts (arena, stadium, theater, amphitheater, club), 30 artists, and 92 events: 83 random ones (80 upcoming over the next 120 days, 3 past; a few cancelled, postponed or rescheduled; about 10 percent not yet on sale) plus the fixed scenarios below.
 
-## Organizer, scanner, admin
+## Seeded demo scenarios
 
-- `/organizer` (org members): events, pricing, inventory (kill/block/assign levels), venues + seating charts, members. New orgs start `pending`; an admin approves them at `/admin/orgs` before they can publish. Flag `require_event_approval` (`/admin/flags`) hides newly published events until approved at `/admin/events`.
-- `/scan/[eventId]` (scanner, box office, manager, owner): paste a SafeTix code or use the camera; offline scans queue in localStorage and retry.
-- Cancelling an event refunds every order (`refundEvent`); failed refunds (card 4000 0000 0000 0341) stay `cancelled` and show at `/admin/refunds` for retry.
+| Slug | What to try |
+|---|---|
+| `neon-harbor-megatour` | Waiting room. On sale 2 minutes after `npm run reset`, admits 6 per minute, 20 inside at once, 30 seeded fans already waiting. `/queue/<eventId>`; the tickets page and `POST /api/holds` return 403 until admitted. |
+| `neon-harbor-empire-wednesday` | Fan club presale open now. Premium sections are held back; enter code `STORMFAN` (25 uses) on the event page. |
+| `neon-harbor-catskill-saturday` | Verified Fan campaign. Registration closes 10 minutes after reset; 1 fan is selected. Log in, register, wait, then `npm run jobs` runs the lottery once and sends codes to `/dev/outbox`. |
+| `neon-harbor-empire-saturday` | Resale. `fan2` has a ticket listed (pink "Verified Resale" seat on the map). `fan` already owns 2 tickets here. |
+| `home-stand-1`, `-2`, `-3` | Three-game bundle at Empire Arena. Section `202` has a "Season Bundle" level: holding a seat there holds the same seat in all three games. |
+| `neon-harbor-empire-cancelled` | Cancelled event (not buyable). |
+| `neon-harbor-empire-onsale-soon` | Not yet on sale ("Upcoming"). |
+| `neon-harbor-empire-saturday` and `neon-harbor-catskill-saturday` | Same artist, same Saturday, two venues about 50 miles apart (radius and date-filter checks); a Wednesday show exists too. |
 
-## Transfers, resale, favorites
+## Test cards
 
-- Ticket page (`/tickets/[id]`): send to an email or phone (claim link goes to `/dev/outbox`), cancel while pending; recipient opens `/transfers/[id]?token=`, logs in or signs up, accepts. The accepted ticket gets a new secret; the old QR is dead.
-- `/sell` and `/listings`: list a valid ticket at a price; resale seats show pink on the map and under "Verified Resale" on the ticket picker. Buyers hold the listing, then use normal checkout. Sellers are credited in `ledger` (no seller fee until P11).
-- Hearts on event cards/pages (events, venues, lineup artists); `/favorites` lists them. Guests are sent to log in.
+Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Behaviour is chosen by the last four digits. Card numbers and CVCs are never stored or logged; only brand and last4 are kept.
 
-## Waiting room, presales, Verified Fan
+| Number | Behaviour |
+|---|---|
+| `4242 4242 4242 4242` | Succeeds |
+| `4000 0000 0000 0002` | Declined (`card_declined`) |
+| `4000 0000 0000 9995` | Declined (`insufficient_funds`) |
+| `4000 0000 0000 3220` | Requires 3-D Secure (approve or fail on `/checkout/3ds/<id>`) |
+| `4000 0000 0000 0341` | Charge succeeds, but refunds fail (used to test failed event-cancel refunds at `/admin/refunds`) |
 
-- `neon-harbor-megatour` has a waiting room and goes on sale 2 minutes after `npm run reset` (6 admitted/min, 20 inside at once, 30 seeded fans already waiting). `/queue/[eventId]` joins (math question + hidden honeypot) and polls every 5s; the tickets page and `POST /api/holds` return 403 until admitted. Organizers set it at `/organizer/[orgId]/events/[id]/queue`.
-- `neon-harbor-empire-wednesday` has a fan club presale open now: enter code `STORMFAN` on the event page to see and hold the held-back seats.
-- `neon-harbor-catskill-saturday` has a Verified Fan campaign (1 fan selected) that closes registration in 10 minutes; log in and register on the event page. After it closes, `npm run jobs` runs the lottery once and sends codes to `/dev/outbox`.
-- Organizers manage windows, codes (CSV) and held-back seats at `/organizer/[orgId]/events/[id]/access`.
-- Limits: 5 queue joins/min and 10 checkout/login attempts/min per IP and per account; `blocklist` rows (`ip`/`email`) are refused at login, queue join and checkout.
+Checkout also asks a math question (single-use captcha) and has a hidden honeypot field.
+
+## Features implemented (P1 to P7)
+
+- **Accounts**: signup, login, logout, email verification, password reset (links in the dev outbox), scrypt hashing, cookie sessions, lazy guest sessions that survive login, `?next=` redirects.
+- **Discovery**: home (trending, near you), search with category, genre, city + radius, date range and quick "today / weekend / month" filters (venue-local dates), accessible-seating filter, suggest endpoint, category pages, event pages with lineup, venue info, status badges (On sale, Upcoming, Sold out, Cancelled, Postponed, Rescheduled, Ended).
+- **Seat selection and holds**: SVG seat map (zoom, pan, keyboard access), reserved seats, general admission areas, best available, accessible seats, per-hold countdown, polling availability, bundle levels, per-account ticket limit.
+- **Checkout and orders**: fake card gateway, saved cards, 3DS, declines that keep the hold, idempotent payments, fees and city tax, guest checkout with emailed order links, order and ticket pages.
+- **Mobile tickets (SafeTix-style)**: QR that rotates every 15 seconds, computed in the browser from a per-ticket secret.
+- **Organizer** (`/organizer`): org signup (admin approval required), events (draft, publish, cancel with automatic refunds, postpone, reschedule), price levels, fee rules, on-sale time, inventory tool (block, comp, kill, assign levels, seat ranges), venues and seating charts (generate, JSON import/export, seat flags), members and roles.
+- **Scanner** (`/scan/[eventId]`): paste or camera (`BarcodeDetector`), offline queue in localStorage with retry.
+- **Admin** (`/admin`): users (block, role), orgs (approve, suspend), events (approve, unpublish, edit text), feature flags (`require_event_approval`), failed refund retry.
+- **Transfers**: send a ticket to an email or phone, claim link in the outbox, cancel while pending, accept issues a new ticket and secret and kills the old QR.
+- **Resale**: list, cancel, buy through the normal checkout; sellers credited in a ledger (`/listings` shows balance).
+- **Favorites**: hearts on events, venues and artists; `/favorites`.
+- **Waiting room, presales, Verified Fan, bot defense**: see the scenarios above. Organizers manage windows, codes (CSV), held-back seats and queue rate/cap at `/organizer/[orgId]/events/[id]/access` and `.../queue`. Limits: 5 queue joins per minute and 10 login/checkout/code attempts per minute per IP and per account; `blocklist` rows (`ip` / `email`) are refused at login, queue join, checkout and code entry.
+
+Upcoming (see [docs/plan.md](docs/plan.md)): P8 pricing, ticket types, add-ons, orphan-seat rule; P9 checkout extras, account pages, protection, refunds and exchanges; P10 notifications, recommendations, artist and venue pages; P11 transfer/resale rules, payouts, reports, admin ops; P12 nice-to-have sweep.
+
+## Simulated external systems
+
+- **Email and SMS** go to the `outbox` table and `console.log`; read them at `/dev/outbox` (404 when `NODE_ENV=production`). Verify links, reset links, order confirmations, transfer claim links and Verified Fan codes all land there.
+- **Push** is the `notifications` table (rows are written; there is no inbox page yet, planned for P10).
+- **Payments** are the fake gateway in `lib/payments.ts`; **payouts** are not implemented (ledger only).
+
+## Tests
+
+`npm test` runs `node:test` suites in `tests/`: auth, discovery helpers, a multi-connection hold race, payments and idempotency, SafeTix windows, organizer/scan/refund flows including concurrent scans, resale and transfers including concurrent buys, queue and bot defense, presales and Verified Fan. They use temporary SQLite files via `TICKETSTORM_DB`.
+
+## Docs
+
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [CHANGELOG.md](CHANGELOG.md)
+- [docs/plan.md](docs/plan.md)
+- [docs/research.md](docs/research.md)
