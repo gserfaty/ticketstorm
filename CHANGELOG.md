@@ -2,6 +2,15 @@
 
 All notable changes, newest first. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no version numbers yet; each section is a commit. Review-fix commits are grouped under their phase.
 
+## P11 review fixes
+
+#### Fixed
+- **Refunds after settlement never reached the ledger** (the organizer kept money it had been paid and could withdraw it). `doRefund` now calls `reverseAfterSettlement`: for every refund payment made after the event's settlement (`settlements.last_refund_payment_id`), once per payment (ref `refund:payment:ID`), cash +refund and organizer, platform and tax accounts are debited in proportion to the order's face, fees plus protection, and tax. Covers `refundEvent` after settlement too. The org balance can reach zero or below; payouts need `amount <= balance`, so it cannot be overdrawn.
+- **Impersonator could spend the target's money and tickets.** Purchases (`pay`, including saved cards and "save card") are refused while impersonating, as are 3DS approval, refund requests and claims, exchange, transfer, resale sell/edit/cancel, support replies and Verified Fan registration. Read-only pages and fan-neutral actions (favorites, inbox, search, presale code entry) still work. `refuseImpersonation()` / `requireSelf()` are the guards.
+- **Refunding one resale order left the seller's credit.** The resale ledger reversal moved from `refundEvent` into `doRefund` (`reverseResale`, runs when a resale order becomes `refunded`, guarded by ref `listing:ID:reversal`), so every refund path reverses it once.
+- `settlement.run` is audited only when the settlement actually ran.
+- The impersonation test now exercises `assertNotImpersonating`, which `requireSelf` calls (plus source checks that every sensitive action file uses the guards).
+
 ## P11: ticket states, transfer and resale rules, payouts, organizer and admin ops
 
 #### Added

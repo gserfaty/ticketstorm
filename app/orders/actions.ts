@@ -7,7 +7,7 @@ import { allowed, clientIp } from '../../lib/defense.ts'
 import { getOrder, heldByBuyer, refundOrder, sendConfirmation } from '../../lib/orders.ts'
 import { UserError } from '../../lib/platform.ts'
 import { submitClaim } from '../../lib/protection.ts'
-import { getUser, getViewer } from '../../lib/session.ts'
+import { getUser, getViewer, refuseImpersonation } from '../../lib/session.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 
@@ -30,6 +30,7 @@ export async function resendConfirmation(f: FormData) {
 
 // Refund button for a rescheduled event: only inside events.refund_window_until, only while nothing was used or passed on.
 export async function requestRefund(f: FormData) {
+  await refuseImpersonation()
   const { o, back } = await authorised(f)
   try {
     const e = db.prepare('SELECT status, refund_window_until FROM events WHERE id = ?').get(o.event_id) as { status: string; refund_window_until: string | null }
@@ -46,6 +47,7 @@ export async function requestRefund(f: FormData) {
 }
 
 export async function fileClaim(f: FormData) {
+  await refuseImpersonation()
   const { o, back } = await authorised(f)
   try {
     submitClaim(o.id, field(f, 'reason'), field(f, 'details'))

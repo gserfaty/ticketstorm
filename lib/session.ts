@@ -3,7 +3,8 @@ import { redirect } from 'next/navigation'
 import { db, tx } from './db.ts'
 import { randomToken } from './auth.ts'
 import type { Viewer } from './orders.ts'
-import { endSession, startSession } from './impersonation.ts'
+import { assertNotImpersonating, endSession, startSession } from './impersonation.ts'
+import { UserError } from './platform.ts'
 
 export const COOKIE = 'ticketstorm_session'
 const DAYS = 30
@@ -74,9 +75,18 @@ export async function requireUser(): Promise<User> {
 }
 
 // Logged in as yourself. While an admin impersonates a user, security, payment and payout changes are refused (they redirect with a message).
+export async function refuseImpersonation() {
+  try {
+    assertNotImpersonating((await getSession())?.token)
+  } catch (e) {
+    if (e instanceof UserError) redirect(`/?error=${encodeURIComponent(e.message)}`)
+    throw e
+  }
+}
+
 export async function requireSelf(): Promise<User> {
   const u = await requireUser()
-  if ((await getSession())?.impersonator_id) redirect(`/?error=${encodeURIComponent('Not available while viewing as another user')}`)
+  await refuseImpersonation()
   return u
 }
 

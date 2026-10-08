@@ -4,14 +4,14 @@ import { redirect } from 'next/navigation'
 import { completeExchange, exchangeable, otherDates } from '../../lib/exchange.ts'
 import { HoldError, holdBestAvailable } from '../../lib/inventory.ts'
 import { UserError } from '../../lib/platform.ts'
-import { ensureSession, requireUser } from '../../lib/session.ts'
+import { ensureSession, requireSelf } from '../../lib/session.ts'
 
 const num = (f: FormData, k: string) => Number(f.get(k))
 const go = (ticketId: number, key: 'error' | 'notice', msg: string, extra = ''): never => redirect(`/tickets/${ticketId}/exchange?${key}=${encodeURIComponent(msg)}${extra}`)
 
 // Step 1: hold one seat at the other date (the normal hold path, with all its gates), then show the price difference.
 export async function holdForExchange(f: FormData) {
-  const user = await requireUser()
+  const user = await requireSelf()
   const ticketId = num(f, 'ticketId')
   const session = await ensureSession()
   try {
@@ -28,7 +28,7 @@ export async function holdForExchange(f: FormData) {
 
 // Step 2: one tx, see lib/exchange.ts.
 export async function confirmExchange(f: FormData) {
-  const user = await requireUser()
+  const user = await requireSelf()
   const ticketId = num(f, 'ticketId')
   const session = await ensureSession()
   let orderId = 0

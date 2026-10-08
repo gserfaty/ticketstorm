@@ -6,7 +6,7 @@ import { db } from '../../lib/db.ts'
 import { redeemCode, registerVf } from '../../lib/access.ts'
 import { allowed, clientIp, isBlocked } from '../../lib/defense.ts'
 import { UserError } from '../../lib/platform.ts'
-import { ensureSession, getUser } from '../../lib/session.ts'
+import { ensureSession, getUser, refuseImpersonation } from '../../lib/session.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 
@@ -40,6 +40,7 @@ export async function unlockPresale(f: FormData) {
 }
 
 export async function registerVerifiedFan(f: FormData) {
+  await refuseImpersonation()
   const { path } = eventPath(f)
   const user = await guard(path)
   if (!user) redirect(`/login?next=${encodeURIComponent(path)}`)

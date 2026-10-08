@@ -103,6 +103,7 @@ Enter a code, pick child (50 percent), senior (25) or student (20) per ticket, a
 - **Transfers**: a pending transfer that is old, or past the event's deadline, becomes `expired` after `npm run jobs`; the sender gets a notice. Recipients can decline.
 - **Tickets**: the QR has a moving band and blurs when you switch tabs. "Add to Apple Wallet" downloads a mock pass; "Tap to enter (NFC)" offers the token to a scanner page open in the same browser (a fan cannot admit a ticket by themselves).
 - **Marketing**: visit `/events/<slug>?src=newsletter`, buy, and the source appears under the event's Marketing page. The email campaign form there sends only to fans who turned on "News and offers" email (account > Notifications), with an unsubscribe link.
+- **Impersonation limits**: while viewing as a user you cannot buy, refund, exchange, transfer, sell, change security or payment settings, or use organizer and admin tools.
 - **Admin**: `/admin/fraud` (flagged users, busiest rate-limit keys, blocklist), `/admin/refunds` (all refunds), `/admin/audit`, `/admin/users` > "View as this user" (banner on every page, audited; security, payout, organizer and admin actions are disabled while viewing), `/help` for the FAQ and contact form.
 
 ## Test cards

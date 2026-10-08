@@ -8,6 +8,7 @@ import { settleListing } from './resale.ts'
 import { alertUser } from './alerts.ts'
 import { APP_URL, notify, sendEmail } from './notify.ts'
 import { money } from './format.ts'
+import { reverseAfterSettlement, reverseResale } from './reports.ts'
 import { fraudScore, REVIEW_AT } from './fraud.ts'
 import { addInstallments, plan } from './installments.ts'
 import { UserError } from './platform.ts'
@@ -309,11 +310,14 @@ function doRefund(orderId: number, opts: RefundOpts): RefundResult {
   const ok = amount > 0 ? refundMoney(orderId, amount) : true
   if (!ok && !opts.record) throw new UserError('The card refused the refund. Nothing was changed.')
   for (const id of kill) killTicket(id, release)
+  if (ok) reverseAfterSettlement(orderId) // refunds after settlement come out of the organizer, platform and tax accounts
 
   const liveLeft = (db.prepare(`SELECT count(*) AS n FROM tickets WHERE order_id = ? AND ${live}`).get(orderId) as { n: number }).n
   // refunding part of an order that is under review does not release the rest of it
   const status = opts.refund === false || !ok ? 'cancelled' : opts.items && liveLeft > 0 ? (o.status === 'review' ? 'review' : 'partially_refunded') : 'refunded'
   db.prepare('UPDATE orders SET status = ?, refund_error = ?, review_reason = ? WHERE id = ?').run(status, ok ? null : 'refund_failed', status === 'review' ? o.review_reason : null, orderId)
+  // a refunded resale order gives the seller's credit (and the fees) back; the seller's own order is refunded separately
+  if (ok && status === 'refunded') reverseResale(orderId)
 
   if (!opts.quiet) {
     const what = opts.refund === false ? `Order #${orderId} was cancelled.` : ok ? `We refunded ${money(amount)} for order #${orderId}.` : `Your refund of ${money(amount)} for order #${orderId} could not be completed yet; we will retry.`
@@ -342,12 +346,6 @@ export function refundEvent(eventId: number): { refunded: number; failed: number
     const mine = "ticket_id IN (SELECT t.id FROM tickets t JOIN inventory i ON i.id = t.inventory_id WHERE i.event_id = ?)"
     db.prepare(`UPDATE listings SET status = 'cancelled', hold_id = NULL, held_until = NULL WHERE status = 'active' AND ${mine}`).run(eventId)
     db.prepare(`UPDATE transfers SET status = 'cancelled' WHERE status = 'pending' AND ${mine}`).run(eventId)
-    // a resold ticket is refunded to both its original and its new order, so take back every ledger row of the resale (seller net, fees, tax, cash), once per listing
-    for (const l of db.prepare(`SELECT id FROM listings WHERE status = 'sold' AND ${mine}`).all(eventId) as { id: number }[]) {
-      if (!db.prepare('SELECT 1 FROM ledger WHERE ref = ?').get(`listing:${l.id}:reversal`)) {
-        db.prepare('INSERT INTO ledger (account, kind, amount, ref) SELECT account, kind, -amount, ? FROM ledger WHERE ref = ?').run(`listing:${l.id}:reversal`, `listing:${l.id}`)
-      }
-    }
   })
   const orders = db
     .prepare("SELECT id FROM orders WHERE event_id = ? AND (status IN ('paid','review','partially_refunded') OR (status = 'cancelled' AND refund_error IS NOT NULL)) ORDER BY id")

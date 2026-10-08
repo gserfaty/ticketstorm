@@ -241,7 +241,7 @@ test('impersonation: admin only, audited start and stop, restrictions apply to t
   assert.equal(row.impersonator_id, admin)
   assert.ok(Date.parse(row.expires_at) - Date.now() <= imp.IMPERSONATION_MS)
   assert.equal(imp.isImpersonating(token), true)
-  assert.throws(() => imp.assertNotImpersonating(token), /Not available/) // what requireSelf enforces
+  assert.throws(() => imp.assertNotImpersonating(token), /Not available/) // the check requireSelf runs on the session token
   imp.assertNotImpersonating('some-normal-session') // no throw
   assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM audit_log WHERE action = 'impersonate.start' AND actor_id = ?", admin).n, 1)
   assert.equal(imp.endSession(token), admin)
@@ -253,6 +253,8 @@ test('impersonation: admin only, audited start and stop, restrictions apply to t
   const acct = read('app/account/actions.ts')
   assert.ok(!acct.includes('requireUser'), 'account actions (password, 2FA, cards, payouts) must use requireSelf')
   const sess = read('lib/session.ts')
+  assert.match(sess, /export async function refuseImpersonation[\s\S]*?assertNotImpersonating\(/) // requireSelf -> refuseImpersonation -> assertNotImpersonating
+  assert.match(sess, /export async function requireSelf[\s\S]*?refuseImpersonation\(\)/)
   assert.match(sess, /requireAdmin[\s\S]*?requireSelf\(\)/)
   assert.match(sess, /requireOrgRole[\s\S]*?requireSelf\(\)/)
 })
@@ -283,4 +285,53 @@ test('support: staff reply is appended, emailed, visible to the owner only; foll
   assert.equal(sup.getSupportTicket(id)!.status, 'open')
   sup.closeTicket(id)
   assert.throws(() => sup.addMessage(id, { staff: false, userId: alice }, 'again'), /closed/)
+})
+
+test('impersonation: money, ticket and listing actions are all guarded', () => {
+  const read = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
+  for (const f of ['app/tickets/exchange-actions.ts', 'app/transfers/actions.ts', 'app/resale/actions.ts', 'app/support/actions.ts']) assert.ok(!read(f).includes('requireUser'), `${f} must use requireSelf`)
+  assert.match(read('app/checkout/actions.ts'), /export async function pay[\s\S]*?impersonator_id/) // no purchases, no saved-card charges
+  const orders = read('app/orders/actions.ts')
+  for (const fn of ['requestRefund', 'fileClaim']) assert.match(orders, new RegExp(`export async function ${fn}[^]*?refuseImpersonation`))
+})
+
+test('refunds after settlement reverse the ledger; org cannot draw more than its balance; resale refund reverses its group', async () => {
+  const { refundOrder, refundEvent } = await import('../lib/orders.ts')
+  const e7 = mkEvent('e7', 5 * 864e5)
+  const ta = buy(alice, e7)[0]
+  buy(bob, e7)
+  db.prepare('UPDATE events SET starts_at = ? WHERE id = ?').run(new Date(Date.now() - 864e5).toISOString(), e7)
+  const oid = (t: number) => get<{ order_id: number }>('SELECT order_id FROM tickets WHERE id = ?', t).order_id
+  const s = settleEvent(e7, admin)
+  const orgBefore = balance(`org:${org}`)
+  assert.equal(orgBefore, s.net)
+  // partial-order refund after settlement: alice's whole order (5000 face + fees + tax)
+  const total = get<{ total: number; fees: number; tax: number }>('SELECT total, fees, tax FROM orders WHERE id = ?', oid(ta))
+  refundOrder(oid(ta), { reason: 'test' })
+  assert.equal(ledgerTotal(), 0)
+  assert.equal(balance(`org:${org}`), orgBefore - 5000) // the face share, exactly what the org was paid for that order
+  assert.equal(get<{ s: number }>("SELECT sum(amount) AS s FROM ledger WHERE ref LIKE 'refund:payment:%' AND account = 'cash'").s, total.total)
+  assert.throws(() => refundOrder(oid(ta), { reason: 'again' }), /cannot be refunded/) // no second refund, no second reversal
+  // the event is then cancelled: bob's order is reversed too, alice's not twice
+  refundEvent(e7)
+  assert.equal(ledgerTotal(), 0)
+  assert.equal(balance(`org:${org}`), orgBefore - 10000)
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM ledger WHERE ref LIKE 'refund:payment:%' AND account = 'cash'").n, 2)
+  // the org is overdrawn: it cannot request anything
+  assert.throws(() => requestPayout(`org:${org}`, alice, 1), /at most/)
+  // refunding ONE resale order reverses its listing group (seller keeps nothing)
+  const e8 = mkEvent('e8', 5 * 864e5)
+  const [t] = buy(alice, e8)
+  const lid = createListing(alice, t, 6000)
+  const before = balance(`user:${alice}`)
+  const h = holdListing(lid, { sessionToken: 'bob-e8', userId: bob })
+  const r = finalize({ holdId: h.holdId, sessionToken: 'bob-e8', userId: bob, email: 'bob@x.test', key: 'p11-e8-key', method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false, billing: { name: 'B', address: 'a', city: 'c', zip: '1' } })
+  assert.ok('orderId' in r)
+  assert.equal(balance(`user:${alice}`), before + 5400)
+  refundOrder((r as { orderId: number }).orderId, { reason: 'test' })
+  assert.equal(balance(`user:${alice}`), before)
+  assert.equal(ledgerTotal(), 0)
+  refundEvent(e8) // no second reversal
+  assert.equal(balance(`user:${alice}`), before)
+  assert.equal(ledgerTotal(), 0)
 })

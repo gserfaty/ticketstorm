@@ -106,7 +106,7 @@ export function settleEvent(eventId: number, actorId: number | null, now = Date.
     const open = one<{ n: number }>("SELECT count(*) AS n FROM orders WHERE event_id = ? AND (status = 'review' OR refund_error IS NOT NULL)", eventId).n
     if (open) throw new UserError(`Resolve ${open} order(s) in review or with failed refunds first`)
     const f = settlementFigures(eventId)
-    db.prepare('INSERT INTO settlements (event_id, org_id, collected, net, fees, tax, settled_by) VALUES (?,?,?,?,?,?,?)').run(eventId, ev.org_id, f.collected, f.net, f.fees + f.protection, f.tax, actorId)
+    db.prepare('INSERT INTO settlements (event_id, org_id, collected, net, fees, tax, last_refund_payment_id, settled_by) VALUES (?,?,?,?,?,?,(SELECT coalesce(max(id), 0) FROM payments WHERE kind = \'refund\'),?)').run(eventId, ev.org_id, f.collected, f.net, f.fees + f.protection, f.tax, actorId)
     const ref = `settle:event:${eventId}`
     ledgerAdd('cash', 'sale', -f.collected, ref)
     ledgerAdd(`org:${ev.org_id}`, 'sale', f.net, ref)
@@ -114,4 +114,36 @@ export function settleEvent(eventId: number, actorId: number | null, now = Date.
     ledgerAdd('tax', 'fee', f.tax, ref)
     return { settled: true, net: f.net }
   })
+}
+
+// A refund that happens AFTER the event was settled takes money back from everyone who was paid: for each such refund payment (once, ref
+// refund:payment:ID) the buyer's cash comes out of the organizer's face share, the platform's fees and the tax in proportion to the order's total,
+// so the ledger stays zero-sum. The org balance may go negative (it was already paid out); payouts need balance >= amount, so it cannot draw more.
+// Resale orders are not the organizer's money (settleListing / reverseResale handle them). Call inside the refund's tx, after the refund rows exist.
+export function reverseAfterSettlement(orderId: number) {
+  const o = db
+    .prepare(
+      `SELECT o.source, o.subtotal - o.discount AS face, o.fees, o.tax, o.protection, o.total, s.org_id, s.last_refund_payment_id AS after FROM orders o
+       JOIN settlements s ON s.event_id = o.event_id WHERE o.id = ?`,
+    )
+    .get(orderId) as { source: string | null; face: number; fees: number; tax: number; protection: number; total: number; org_id: number; after: number } | undefined
+  if (!o || o.source === 'resale' || o.total <= 0) return
+  const pays = db.prepare("SELECT id, amount FROM payments WHERE order_id = ? AND kind = 'refund' AND status = 'succeeded' AND method != 'exchange' AND id > ? ORDER BY id").all(orderId, o.after) as { id: number; amount: number }[]
+  for (const p of pays) {
+    const ref = `refund:payment:${p.id}`
+    if (db.prepare('SELECT 1 FROM ledger WHERE ref = ?').get(ref)) continue
+    const platform = Math.round((p.amount * (o.fees + o.protection)) / o.total)
+    const tax = Math.round((p.amount * o.tax) / o.total)
+    ledgerAdd('cash', 'refund', p.amount, ref)
+    ledgerAdd(`org:${o.org_id}`, 'refund', -(p.amount - platform - tax), ref)
+    ledgerAdd('platform', 'refund', -platform, ref)
+    ledgerAdd('tax', 'refund', -tax, ref)
+  }
+}
+
+// Refunding a resale order takes back the whole resale ledger group (seller net, platform fees, tax, cash), once per listing (guard: ref listing:ID:reversal).
+export function reverseResale(orderId: number) {
+  const l = db.prepare("SELECT l.id FROM orders o JOIN listings l ON l.hold_id = o.hold_id AND l.status = 'sold' WHERE o.id = ? AND o.source = 'resale'").get(orderId) as { id: number } | undefined
+  if (!l || db.prepare('SELECT 1 FROM ledger WHERE ref = ?').get(`listing:${l.id}:reversal`)) return
+  db.prepare('INSERT INTO ledger (account, kind, amount, ref) SELECT account, kind, -amount, ? FROM ledger WHERE ref = ?').run(`listing:${l.id}:reversal`, `listing:${l.id}`)
 }

@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation'
 import { db } from '../../lib/db.ts'
 import { HoldError } from '../../lib/inventory.ts'
 import { cancelListing, createListing, holdListing, updateListing } from '../../lib/resale.ts'
-import { ensureSession, requireUser } from '../../lib/session.ts'
+import { ensureSession, requireSelf } from '../../lib/session.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 const id = (f: FormData, k: string) => (/^\d+$/.test(field(f, k)) ? Number(field(f, k)) : 0)
@@ -14,7 +14,7 @@ const go = (path: string, key: 'error' | 'notice', msg: string): never => redire
 const toCents = (s: string) => (/^\d{1,6}(\.\d{1,2})?$/.test(s) ? Math.round(Number(s) * 100) : 0)
 
 export async function sellTicket(f: FormData) {
-  const user = await requireUser()
+  const user = await requireSelf()
   const back = '/sell'
   try {
     createListing(user.id, id(f, 'ticketId'), toCents(field(f, 'price')))
@@ -26,7 +26,7 @@ export async function sellTicket(f: FormData) {
 }
 
 export async function editListingAction(f: FormData) {
-  const user = await requireUser()
+  const user = await requireSelf()
   try {
     updateListing(user.id, id(f, 'listingId'), toCents(field(f, 'price')))
   } catch (e) {
@@ -37,7 +37,7 @@ export async function editListingAction(f: FormData) {
 }
 
 export async function cancelListingAction(f: FormData) {
-  const user = await requireUser()
+  const user = await requireSelf()
   try {
     cancelListing(user.id, id(f, 'listingId'))
   } catch (e) {

@@ -177,8 +177,8 @@ export async function settleEventAction(f: FormData) {
   const back = `/organizer/${e.org_id}/payouts`
   run(back, () => {
     const r = settleEvent(e.id, e.user.id)
+    if (!r.settled) throw new UserError('This event was already settled') // a repeat changes nothing, so it is not audited
     audit(e.user.id, 'settlement.run', `event:${e.id}`, r)
-    if (!r.settled) throw new UserError('This event was already settled')
   }, 'Event settled into your organization balance')
 }
 

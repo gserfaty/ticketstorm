@@ -11,7 +11,7 @@ import { setCheckoutOptions } from '../../lib/pricing.ts'
 import { approve3ds, fail3ds, finalize } from '../../lib/orders.ts'
 import { brandOf, validateCard } from '../../lib/payments.ts'
 import type { Method } from '../../lib/payments.ts'
-import { getSession, getUser } from '../../lib/session.ts'
+import { getSession, getUser, refuseImpersonation } from '../../lib/session.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 const back = (holdId: number, msg: string): never => redirect(`/checkout/${holdId}?error=${encodeURIComponent(msg)}`)
@@ -27,6 +27,7 @@ const DECLINES: Record<string, string> = {
 
 export async function pay(_: PayState, f: FormData): Promise<PayState> {
   const session = await getSession()
+  if (session?.impersonator_id) return { error: 'Purchases are disabled while viewing as another user' } // would charge the target's saved card
   const holdId = Number(field(f, 'holdId'))
   if (!session || !Number.isInteger(holdId) || holdId < 1) redirect('/')
   const v = Object.fromEntries(['email', 'bname', 'baddress', 'bcity', 'bzip'].map((k) => [k, field(f, k)]))
@@ -110,6 +111,7 @@ export async function applyOptions(f: FormData) {
 }
 
 export async function threeDs(f: FormData) {
+  await refuseImpersonation()
   const session = await getSession()
   const id = Number(field(f, 'paymentId'))
   if (!session || !Number.isInteger(id)) redirect('/')

@@ -471,6 +471,7 @@ CREATE TABLE IF NOT EXISTS settlements (
   net INTEGER NOT NULL,
   fees INTEGER NOT NULL,
   tax INTEGER NOT NULL,
+  last_refund_payment_id INTEGER NOT NULL DEFAULT 0, -- refunds with a higher payment id happened after settlement and are reversed in the ledger
   settled_by INTEGER REFERENCES users(id)
 );
 

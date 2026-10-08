@@ -181,9 +181,12 @@ A resold ticket exists on two orders (the original buyer's and the new buyer's) 
 | Resale sold (`listing:ID`) | cash -(price + buyer fee + tax); seller +(price - seller fee); platform +seller fee; platform +buyer fee; tax +tax |
 | Cancel after resale (`listing:ID:reversal`, once) | every row above negated, so the seller loses exactly the net credit |
 | Settlement (`settle:event:ID`, once per event) | cash -collected; org +net; platform +fees and protection; tax +tax |
+| Refund after settlement (`refund:payment:ID`) | cash +refund; org -face share; platform -fees share; tax -tax share |
 | Payout request (`payout:ID`) | account -X; payouts +X (this reserves the funds) |
 | Payout paid (`payout:ID:paid`) | payouts -X; cash +X |
 | Payout rejected (`payout:ID:rejected`) | payouts -X; account +X |
+
+**Refunds after settlement.** `reverseAfterSettlement` (in `doRefund`) writes, per refund payment newer than the settlement and once (ref `refund:payment:ID`): cash +amount, org -(amount - platform part - tax part), platform -(amount x (fees + protection) / total), tax -(amount x tax / total). Zero-sum; the organizer balance may go negative and payouts need `amount <= balance`. `reverseResale` (also in `doRefund`, when a resale order ends `refunded`) negates the listing's whole ledger group once.
 
 The buyer fee is the ticket item's `fee_cents` on the resale order (`source = 'resale'`); `quote()` uses a fee rule of just the buyer percent for resale holds, so `sum(unit + fee + tax) == total` as for any order. A seller balance can go negative if a cancellation reverses a credit already paid out; payouts require balance >= amount.
 
@@ -194,6 +197,8 @@ The buyer fee is the ticket item's `fee_cents` on the resale order (`source = 'r
 ### Impersonation
 
 `lib/impersonation.ts`: an admin (never another admin, never a blocked user) swaps their session for a 1-hour session of the target with `sessions.impersonator_id`. The root layout shows a banner on every page. `requireSelf()` (in `session.ts`) refuses while the session has an impersonator, and is what `requireAdmin`, `requireOrgRole` and every account action (profile, phone, password-confirmed forms, 2FA, saved cards, delete account, payouts) go through; so the impersonator can look and use fan features but cannot change the target's password, 2FA or payment methods, request payouts, run organizer mutations, or reach admin actions. Start and stop (including logout) are written to `audit_log` with the admin as actor. Stopping signs the admin back in with a fresh session.
+
+**Actions by guard.** `requireSelf` / `refuseImpersonation` (refused while impersonating): all `app/account/*` actions, payouts (user and org), `pay` (so no saved-card charge or card saving), `threeDs`, `requestRefund`, `fileClaim`, exchange (hold and confirm), transfers (send, cancel, accept, decline), resale (sell, edit, cancel), support replies, Verified Fan registration, every organizer action (`requireOrgRole`) and every admin action (`requireAdmin`). Allowed while impersonating (view or harmless): all pages, `resendConfirmation`, favorites, inbox read marks, presale code entry, search, holding seats (nothing can be bought), ADA and help forms.
 
 ### Audit
 
