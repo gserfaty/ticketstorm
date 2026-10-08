@@ -106,3 +106,7 @@ export function assertDelivery(eventId: number, d: string): Delivery {
   if (d === 'willcall' && !e.willcall_ok) throw new HoldError('Will-call is not offered for this event', 409)
   return d as Delivery
 }
+
+// SQL for what a buyer pays for listing `l` in hold `h`: the accepted offer's price while the listing is reserved for that buyer, else the asking price.
+export const listingPrice = (nowIso = new Date().toISOString()) =>
+  `CASE WHEN l.reserved_for = h.user_id AND l.reserved_until > '${nowIso}' AND l.offer_price_cents IS NOT NULL THEN l.offer_price_cents ELSE l.price_cents END`

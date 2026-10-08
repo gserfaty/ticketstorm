@@ -1,8 +1,11 @@
 'use server'
 
+import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { db } from '../../lib/db.ts'
+import { allowed, clientIp } from '../../lib/defense.ts'
 import { HoldError } from '../../lib/inventory.ts'
+import { acceptOffer, makeOffer, rejectOffer, reservedFor, withdrawOffer } from '../../lib/offers.ts'
 import { cancelListing, createListing, holdListing, updateListing } from '../../lib/resale.ts'
 import { ensureSession, requireSelf } from '../../lib/session.ts'
 
@@ -57,6 +60,47 @@ export async function buyListing(f: FormData) {
     holdId = holdListing(id(f, 'listingId'), { sessionToken: token, userId }).holdId
   } catch (e) {
     if (e instanceof HoldError) go(back, 'error', e.message)
+    throw e
+  }
+  redirect(`/checkout/${holdId}`)
+}
+
+// ---- offers: every one is a fan action on a ticket or money, so requireSelf (an impersonating admin is refused) ----
+export async function makeOfferAction(f: FormData) {
+  const user = await requireSelf()
+  const back = field(f, 'back').startsWith('/') && !field(f, 'back').startsWith('//') ? field(f, 'back') : '/'
+  if (!allowed('offer', clientIp(await headers()), user.id, 10)) go(back, 'error', 'Too many offers, wait a minute')
+  try {
+    makeOffer(user.id, id(f, 'listingId'), toCents(field(f, 'price')))
+  } catch (e) {
+    if (e instanceof HoldError) go(back, 'error', e.message)
+    throw e
+  }
+  go(back, 'notice', 'Offer sent. The seller has 48 hours to answer; follow it on your seller dashboard.')
+}
+
+const offerAction = (fn: (userId: number, offerId: number) => void, ok: string) => async (f: FormData) => {
+  const user = await requireSelf()
+  try {
+    fn(user.id, id(f, 'offerId'))
+  } catch (e) {
+    if (e instanceof HoldError) go('/seller', 'error', e.message)
+    throw e
+  }
+  go('/seller', 'notice', ok)
+}
+export const acceptOfferAction = offerAction(acceptOffer, 'Offer accepted. The ticket is reserved for the buyer for 30 minutes.')
+export const rejectOfferAction = offerAction(rejectOffer, 'Offer declined.')
+export const withdrawOfferAction = offerAction(withdrawOffer, 'Offer withdrawn.')
+
+export async function checkoutOfferAction(f: FormData) {
+  const user = await requireSelf()
+  const token = await ensureSession()
+  let holdId = 0
+  try {
+    holdId = holdListing(reservedFor(user.id, id(f, 'offerId')), { sessionToken: token, userId: user.id }).holdId
+  } catch (e) {
+    if (e instanceof HoldError) go('/seller', 'error', e.message)
     throw e
   }
   redirect(`/checkout/${holdId}`)

@@ -445,7 +445,10 @@ CREATE TABLE IF NOT EXISTS listings (
   expires_at TEXT NOT NULL,
   seller_fee_pct INTEGER NOT NULL DEFAULT 10, -- fixed when the listing is created or re-priced: what the seller was shown
   hold_id INTEGER REFERENCES holds(id),
-  held_until TEXT
+  held_until TEXT,
+  reserved_for INTEGER REFERENCES users(id), -- accepted offer: reserved for this buyer at offer_price_cents until reserved_until (lazy expiry)
+  reserved_until TEXT,
+  offer_price_cents INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_listing ON listings(ticket_id) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS listings_hold ON listings(hold_id);
@@ -661,3 +664,17 @@ CREATE TABLE IF NOT EXISTS vendor_links (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   PRIMARY KEY (user_id, vendor)
 );
+
+-- P12B: resale make-an-offer. A buyer offers below the asking price; the seller accepts (listing reserved for that buyer at the offer price) or rejects.
+CREATE TABLE IF NOT EXISTS resale_offers (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  listing_id INTEGER NOT NULL REFERENCES listings(id),
+  buyer_id INTEGER NOT NULL REFERENCES users(id),
+  price_cents INTEGER NOT NULL CHECK (price_cents > 0),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected','withdrawn','expired','completed')),
+  expires_at TEXT NOT NULL,
+  decided_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_pending_offer ON resale_offers(listing_id, buyer_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS offers_listing ON resale_offers(listing_id);

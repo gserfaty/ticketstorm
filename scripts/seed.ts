@@ -7,6 +7,7 @@ import { addWindow, assignWindow } from '../lib/access.ts'
 import { joinQueue } from '../lib/queue.ts'
 import { finalize } from '../lib/orders.ts'
 import { createListing } from '../lib/resale.ts'
+import { makeOffer } from '../lib/offers.ts'
 import { settleEvent } from '../lib/reports.ts'
 import { addMessage, createContact } from '../lib/support.ts'
 import { scanTicket } from '../lib/scan.ts'
@@ -511,6 +512,13 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   put('guide-chicago', 'guide', 'Chicago: Lakefront nights', 'Theatre seats with a view of the water.', 'Chicago', [])
   put('guide-nashville', 'guide', 'Nashville: small rooms, big sound', 'The Basement is the best-kept secret on the strip.', 'Nashville', [])
   put('guide-toronto', 'guide', 'Toronto: the international demo', 'Prices in CAD (approximate), local HST, card charged in USD.', 'Toronto', [['toronto-intl-demo', 'Try the currency selector in the header.']])
+}
+
+// P12B (resale): fan@ has offered $100 on fan2@'s $125 listing; fan2@ sees it (and can accept or reject) on /seller.
+{
+  const uid = (email: string) => (db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: number }).id
+  const l = db.prepare("SELECT id FROM listings WHERE status = 'active' AND seller_id = ?").get(uid('fan2@ticketstorm.test')) as { id: number }
+  makeOffer(uid('fan@ticketstorm.test'), l.id, 10000)
 }
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

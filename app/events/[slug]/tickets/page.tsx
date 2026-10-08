@@ -8,7 +8,7 @@ import { activeListings } from '../../../../lib/resale.ts'
 import { displayLevels, pricingCtx, shown } from '../../../../lib/pricing.ts'
 import { allInOn, getSession, getUser } from '../../../../lib/session.ts'
 import { money } from '../../../../lib/format.ts'
-import { buyListing } from '../../../resale/actions.ts'
+import { buyListing, makeOfferAction } from '../../../resale/actions.ts'
 import SeatMap from '../../../../components/SeatMap.tsx'
 import type { MapSeat, MapSection } from '../../../../components/SeatMap.tsx'
 
@@ -29,7 +29,8 @@ export default async function Tickets({ params, searchParams }: { params: Promis
   const allIn = await allInOn()
   const ctx = pricingCtx(e!.id)
   const qty = Math.min(Math.max(parseInt(sp.qty ?? '', 10) || 2, 1), limit)
-  const listings = activeListings(e!.id, (await getUser())?.id ?? null)
+  const user = await getUser()
+  const listings = activeListings(e!.id, user?.id ?? null)
   const back = `/events/${slug}/tickets`
   const resale = (
     <>
@@ -39,13 +40,23 @@ export default async function Tickets({ params, searchParams }: { params: Promis
           <h2>Verified Resale</h2>
           <p className="muted">Tickets from other fans, sold through TicketStorm. Each has a new barcode.</p>
           {listings.map((l) => (
-            <form action={buyListing} className="card row" key={l.id}>
-              <input type="hidden" name="listingId" value={l.id} />
-              <input type="hidden" name="back" value={back} />
-              {l.row ? `Section ${l.section} Row ${l.row} Seat ${l.number}` : `General admission ${l.section}`} · {money(shown(l.price_cents, ctx, allIn))}{' '}
-              {l.mine ? <span className="muted">Your listing</span> : l.held ? <span className="muted">Someone is checking out</span> : <button>Buy</button>}
-            </form>
+            <div className="card" key={l.id}>
+              <form action={buyListing} className="row">
+                <input type="hidden" name="listingId" value={l.id} />
+                <input type="hidden" name="back" value={back} />
+                {l.row ? `Section ${l.section} Row ${l.row} Seat ${l.number}` : `General admission ${l.section}`} · {money(shown(l.price_cents, ctx, allIn))}{' '}
+                {l.mine ? <span className="muted">Your listing</span> : l.held ? <span className="muted">Someone is checking out or has a reserved offer</span> : <button>Buy</button>}
+              </form>
+              {!l.mine && !l.held && user && (
+                <form action={makeOfferAction} className="row">
+                  <input type="hidden" name="listingId" value={l.id} />
+                  <input type="hidden" name="back" value={back} />
+                  <label>Make an offer $ <input name="price" inputMode="decimal" size={7} required pattern="\d{1,6}(\.\d{1,2})?" aria-label={`Offer in dollars for ${l.row ? `Row ${l.row} Seat ${l.number}` : l.section}`} /></label> <button>Send offer</button>
+                </form>
+              )}
+            </div>
           ))}
+          <p className="muted">Offers go to the seller, who has 48 hours to answer. If accepted, the ticket is reserved for you at your price for 30 minutes. Floors and ceilings set by the organizer apply. Third-party resale marketplaces are not integrated.</p>
         </>
       )}
     </>

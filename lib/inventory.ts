@@ -289,12 +289,12 @@ export function getAvailability(eventId: number, windowIds: number[] = []) {
   const seats = db
     .prepare(
       `SELECT id, CASE WHEN NOT ${visible('window_id', windowIds.length)} THEN 'b' WHEN status = 'held' THEN CASE WHEN held_until < ? THEN 'a' ELSE 'h' END
-         WHEN status = 'sold' THEN coalesce((SELECT CASE WHEN l.held_until > ? THEN 'h' ELSE 'r' END FROM listings l JOIN tickets t ON t.id = l.ticket_id
+         WHEN status = 'sold' THEN coalesce((SELECT CASE WHEN l.held_until > ? OR l.reserved_until > ? THEN 'h' ELSE 'r' END FROM listings l JOIN tickets t ON t.id = l.ticket_id
            WHERE t.inventory_id = inventory.id AND t.status = 'listed' AND l.status = 'active' AND l.expires_at > ?), 's')
          ELSE substr(status, 1, 1) END AS st, price_level_id AS lv
        FROM inventory WHERE event_id = ? AND seat_id IS NOT NULL ORDER BY id`,
     )
-    .all(...windowIds, now, now, now, eventId) as { id: number; st: string; lv: number }[]
+    .all(...windowIds, now, now, now, now, eventId) as { id: number; st: string; lv: number }[]
   const ga = db
     .prepare(
       `SELECT section_id AS sectionId, price_level_id AS levelId, count(*) AS total,

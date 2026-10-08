@@ -66,6 +66,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <Link href="/favorites">Favorites</Link>
                   <Link href="/sell">Sell tickets</Link>
                   <Link href="/listings">My listings</Link>
+                  <Link href="/seller">Seller dashboard</Link>
+                  <Link href="/claims">Claims</Link>
                   <Link href="/account/payouts">Payouts</Link>
                   <Link href={isMember ? '/organizer' : '/become-organizer'}>{isMember ? 'Organizer' : 'Become an organizer'}</Link>
                   {user.role === 'admin' && <Link href="/admin">Admin</Link>}

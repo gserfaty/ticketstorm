@@ -1,6 +1,6 @@
 import { db } from './db.ts'
 import { UserError } from './platform.ts'
-import { resaleRule } from './rules.ts'
+import { listingPrice, resaleRule } from './rules.ts'
 
 export type FeeRule = { service_pct: number; facility_cents: number; order_cents: number; delivery_cents?: number }
 export const DEFAULT_FEES: FeeRule = { service_pct: 10, facility_cents: 300, order_cents: 250, delivery_cents: 0 }
@@ -214,8 +214,8 @@ export function quote(holdId: number): Quote {
   // a resale hold reserves one listing instead of inventory rows; the buyer pays the seller's asking price, no offers/promo/add-ons
   const resale = db
     .prepare(
-      `SELECT i.id, i.event_id, l.price_cents, 'Verified Resale' AS level, s.name AS section, st.row, st.number, l.id AS listing_id
-       FROM listings l JOIN tickets t ON t.id = l.ticket_id JOIN inventory i ON i.id = t.inventory_id JOIN sections s ON s.id = i.section_id
+      `SELECT i.id, i.event_id, ${listingPrice()} AS price_cents, 'Verified Resale' AS level, s.name AS section, st.row, st.number, l.id AS listing_id
+       FROM listings l JOIN holds h ON h.id = l.hold_id JOIN tickets t ON t.id = l.ticket_id JOIN inventory i ON i.id = t.inventory_id JOIN sections s ON s.id = i.section_id
        LEFT JOIN seats st ON st.id = i.seat_id WHERE l.hold_id = ? AND l.status = 'active'`,
     )
     .all(holdId) as R[]
