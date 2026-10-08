@@ -9,7 +9,8 @@ export const dynamic = 'force-dynamic'
 
 export default async function Ticket({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ t?: string }> }) {
   const id = Number((await params).id)
-  const t = Number.isInteger(id) ? getTicket(id, await getViewer((await searchParams).t)) : undefined
+  const tok = (await searchParams).t
+  const t = Number.isInteger(id) ? getTicket(id, await getViewer(tok)) : undefined
   if (!t) notFound()
   return (
     <>
@@ -17,7 +18,7 @@ export default async function Ticket({ params, searchParams }: { params: Promise
       <p>{t!.venue} · {fmtDateTimeTz(t!.starts_at, t!.tz)}</p>
       <p>{t!.row ? `Section ${t!.section} Row ${t!.row} Seat ${t!.number}` : `General admission ${t!.section}`} · <span className="badge">{t!.status}</span></p>
       {t!.status === 'valid' ? <TicketQR ticketId={t!.id} secret={t!.secret} /> : <p>This ticket is {t!.status} and cannot be scanned.</p>}
-      <p><Link href={`/orders/${t!.order_id}`}>Order #{t!.order_id}</Link></p>
+      <p><Link href={`/orders/${t!.order_id}${tok ? `?t=${encodeURIComponent(tok)}` : ''}`}>Order #{t!.order_id}</Link></p>
     </>
   )
 }

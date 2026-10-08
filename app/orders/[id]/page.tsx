@@ -19,6 +19,7 @@ export default async function Order({ params, searchParams }: { params: Promise<
        JOIN tickets tk ON tk.order_id = oi.order_id AND tk.inventory_id = oi.inventory_id WHERE oi.order_id = ? ORDER BY oi.id`,
     )
     .all(id) as { unit_cents: number; fee_cents: number; tax_cents: number; ticket_id: number; status: string; section: string; row: string | null; number: number | null }[]
+  const orderFee = (db.prepare("SELECT coalesce(sum(fee_cents), 0) AS f FROM order_items WHERE order_id = ? AND kind = 'fee'").get(id) as { f: number }).f
   const suffix = t ? `?t=${encodeURIComponent(t)}` : ''
   return (
     <>
@@ -33,6 +34,7 @@ export default async function Order({ params, searchParams }: { params: Promise<
               <Link href={`/tickets/${i.ticket_id}${suffix}`}>View ticket</Link>
             </li>
           ))}
+          {orderFee > 0 && <li>Order processing fee · {money(orderFee)}</li>}
         </ul>
         <table>
           <tbody>

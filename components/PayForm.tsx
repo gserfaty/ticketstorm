@@ -1,7 +1,9 @@
 'use client'
 import { useRouter } from 'next/navigation'
+import { useActionState } from 'react'
 import { useFormStatus } from 'react-dom'
 import Countdown from './Countdown.tsx'
+import type { PayState } from '../app/checkout/actions.ts'
 
 type Saved = { id: number; brand: string; last4: string; exp: string }
 
@@ -12,7 +14,7 @@ function Submit({ label }: { label: string }) {
 
 // Card number and CVC are never given a `name` that is logged or stored server-side; they are read once by the pay action.
 export default function PayForm({ action, holdId, idemKey, expiresAt, email, saved, canSave, total }: {
-  action: (f: FormData) => void
+  action: (prev: PayState, f: FormData) => Promise<PayState>
   holdId: number
   idemKey: string
   expiresAt: string
@@ -22,19 +24,22 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
   total: string
 }) {
   const router = useRouter()
+  const [state, formAction] = useActionState(action, {} as PayState)
+  const v = state.v ?? {}
   return (
-    <form action={action} className="stack">
+    <form action={formAction} className="stack">
+      {state.error && <p className="error" role="alert">{state.error}</p>}
       <p>Time left to pay: <strong><Countdown expiresAt={expiresAt} onExpire={() => router.refresh()} /></strong></p>
       <input type="hidden" name="holdId" value={holdId} />
       <input type="hidden" name="key" value={idemKey} />
       <h2>Contact</h2>
-      {email ? <p>Tickets will be sent to <strong>{email}</strong></p> : <input name="email" type="email" placeholder="Email (for your tickets)" required autoComplete="email" />}
+      {email ? <p>Tickets will be sent to <strong>{email}</strong></p> : <input name="email" type="email" defaultValue={v.email} placeholder="Email (for your tickets)" required autoComplete="email" />}
       <p className="muted">Delivery: Mobile ticket</p>
       <h2>Billing address</h2>
-      <input name="bname" placeholder="Full name" required autoComplete="name" />
-      <input name="baddress" placeholder="Street address" required autoComplete="street-address" />
-      <input name="bcity" placeholder="City" required autoComplete="address-level2" />
-      <input name="bzip" placeholder="ZIP" required autoComplete="postal-code" />
+      <input name="bname" defaultValue={v.bname} placeholder="Full name" required autoComplete="name" />
+      <input name="baddress" defaultValue={v.baddress} placeholder="Street address" required autoComplete="street-address" />
+      <input name="bcity" defaultValue={v.bcity} placeholder="City" required autoComplete="address-level2" />
+      <input name="bzip" defaultValue={v.bzip} placeholder="ZIP" required autoComplete="postal-code" />
       <h2>Payment</h2>
       {saved.length > 0 && (
         <select name="saved" defaultValue="" aria-label="Saved card">

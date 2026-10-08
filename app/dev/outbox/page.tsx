@@ -1,3 +1,4 @@
+import { notFound } from 'next/navigation'
 import { db } from '../../../lib/db.ts'
 
 type Msg = { id: number; created_at: string; channel: string; to: string; subject: string | null; body: string }
@@ -10,6 +11,7 @@ function linkify(text: string) {
 }
 
 export default function Outbox() {
+  if (process.env.NODE_ENV === 'production') notFound()
   const msgs = db.prepare('SELECT id, created_at, channel, "to", subject, body FROM outbox ORDER BY id DESC LIMIT 200').all() as Msg[]
   return (
     <>

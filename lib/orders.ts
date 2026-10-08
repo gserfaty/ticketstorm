@@ -79,6 +79,8 @@ function createOrder(p: Payment): number {
     item.run(order.id, l.inventoryId, l.unit, l.fee, l.tax)
     ticket.run(order.id, l.inventoryId, m.userId, randomBytes(32).toString('hex'))
   }
+  // per-order processing fee as its own line, so sum(items) == total
+  db.prepare("INSERT INTO order_items (order_id, kind, unit_cents, fee_cents, tax_cents) VALUES (?, 'fee', 0, ?, 0)").run(order.id, q.orderFee)
   db.prepare('UPDATE payments SET order_id = ? WHERE id = ?').run(order.id, p.id)
   db.prepare("UPDATE holds SET status = 'converted' WHERE id = ?").run(hold.id)
   if (m.save && m.userId) {

@@ -286,7 +286,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   id INTEGER PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   order_id INTEGER NOT NULL REFERENCES orders(id),
-  kind TEXT NOT NULL DEFAULT 'ticket' CHECK (kind IN ('ticket','addon','protection','giftcard')),
+  kind TEXT NOT NULL DEFAULT 'ticket' CHECK (kind IN ('ticket','addon','protection','giftcard','fee')),
   inventory_id INTEGER REFERENCES inventory(id),
   addon_id INTEGER,
   offer_id INTEGER,

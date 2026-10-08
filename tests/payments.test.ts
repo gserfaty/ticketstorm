@@ -61,7 +61,7 @@ test('success creates order, sold inventory, tickets; same key charges once', ()
   assert.equal(db.prepare("SELECT count(*) AS n FROM inventory WHERE hold_id = ? AND status = 'sold'").get(h)!.n, 2)
   const o = db.prepare('SELECT subtotal, fees, tax, total FROM orders WHERE id = ?').get((r as { orderId: number }).orderId) as { subtotal: number; fees: number; tax: number; total: number }
   assert.equal(o.total, o.subtotal + o.fees + o.tax)
-  assert.equal(o.total, (db.prepare('SELECT sum(unit_cents + fee_cents + tax_cents) AS s FROM order_items WHERE order_id = ?').get((r as { orderId: number }).orderId) as { s: number }).s + 250)
+  assert.equal(o.total, (db.prepare('SELECT sum(unit_cents + fee_cents + tax_cents) AS s FROM order_items WHERE order_id = ?').get((r as { orderId: number }).orderId) as { s: number }).s)
   // a different session cannot replay someone else's key
   assert.throws(() => finalize(input(h, 's2', '4242', 'idem-same-key')))
 })

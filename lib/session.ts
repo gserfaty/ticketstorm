@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers'
 import { notFound, redirect } from 'next/navigation'
-import { db } from './db.ts'
+import { db, tx } from './db.ts'
 import { randomToken } from './auth.ts'
 import type { Viewer } from './orders.ts'
 
@@ -87,8 +87,16 @@ export async function requireOrgRole(orgId: number, roles: string[]) {
 
 // Fresh token on login (no session fixation); the old guest session is discarded.
 export async function login(userId: number) {
+  const old = (await cookies()).get(COOKIE)?.value
   await logout()
-  await setCookie(createSession(userId))
+  const token = createSession(userId)
+  // carry the guest session's in-progress rows over, or logging in mid-checkout loses the hold
+  if (old) tx(() => {
+    db.prepare("UPDATE holds SET session_token = ?, user_id = ? WHERE session_token = ? AND status = 'active'").run(token, userId, old)
+    db.prepare("UPDATE payments SET session_token = ? WHERE session_token = ? AND status = 'requires_3ds'").run(token, old)
+    db.prepare('UPDATE orders SET session_token = ? WHERE session_token = ? AND user_id IS NULL').run(token, old)
+  })
+  await setCookie(token)
 }
 
 export async function logout() {

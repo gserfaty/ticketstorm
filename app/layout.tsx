@@ -47,7 +47,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                   <Link href="/signup">Sign up</Link>
                 </>
               )}
-              <Link href="/dev/outbox">Dev outbox</Link>
+              {process.env.NODE_ENV !== 'production' && <Link href="/dev/outbox">Dev outbox</Link>}
             </nav>
           </details>
         </header>
