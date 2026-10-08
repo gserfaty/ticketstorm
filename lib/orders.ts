@@ -6,8 +6,8 @@ import type { Method, Payment } from './payments.ts'
 import { allocate, quote } from './pricing.ts'
 import { ledgerAdd } from './ledger.ts'
 import { settleListing } from './resale.ts'
-import { alertUser, emailUser } from './alerts.ts'
-import { APP_URL, notify } from './notify.ts'
+import { alertUser } from './alerts.ts'
+import { APP_URL, notify, sendEmail } from './notify.ts'
 import { money } from './format.ts'
 import { fraudScore, REVIEW_AT } from './fraud.ts'
 import { addInstallments, plan } from './installments.ts'
@@ -159,9 +159,7 @@ export function sendConfirmation(orderId: number) {
     )
     .get(orderId) as { id: number; user_id: number | null; email: string; access_token: string; total: number; status: string; title: string; n: number }
   const t = `?t=${o.access_token}`
-  emailUser(
-    o.user_id,
-    'orders',
+  sendEmail(
     o.email,
     `Your TicketStorm order #${o.id}`,
     `Thanks! ${o.n} ticket(s) for ${o.title}, total ${money(o.total)}.${o.status === 'review' ? '\nYour order is being reviewed; your tickets unlock when it is approved.' : ''}\nView your order and tickets: ${APP_URL}/orders/${o.id}${t}\nReceipt: ${APP_URL}/orders/${o.id}/receipt${t}`,
@@ -318,7 +316,7 @@ function doRefund(orderId: number, opts: RefundOpts): RefundResult {
 
   if (!opts.quiet) {
     const what = opts.refund === false ? `Order #${orderId} was cancelled.` : ok ? `We refunded ${money(amount)} for order #${orderId}.` : `Your refund of ${money(amount)} for order #${orderId} could not be completed yet; we will retry.`
-    emailUser(o.user_id, 'orders', o.email, `Order #${orderId} update`, `${what}\n${APP_URL}/orders/${orderId}${o.user_id ? '' : `?t=${o.access_token}`}`)
+    sendEmail(o.email, `Order #${orderId} update`, `${what}\n${APP_URL}/orders/${orderId}${o.user_id ? '' : `?t=${o.access_token}`}`)
     if (o.user_id) notify(o.user_id, 'order', `Order #${orderId} ${status.replace('_', ' ')}`, what, `/orders/${orderId}`)
   }
   return { amount, ok, status }
@@ -360,9 +358,7 @@ export function refundEvent(eventId: number): { refunded: number; failed: number
       const after = r.ok ? 'refunded' : 'cancelled'
       if (o.status !== after) {
         const link = `${APP_URL}/orders/${id}${o.user_id ? '' : `?t=${o.access_token}`}`
-        emailUser(
-          o.user_id,
-          'orders',
+        sendEmail(
           o.email,
           `${ev.title} has been cancelled`,
           r.ok ? `${ev.title} was cancelled. Your order #${id} was refunded in full (${money(r.amount)}).\n${link}` : `${ev.title} was cancelled. Your refund of ${money(r.amount)} for order #${id} could not be completed yet; we will retry and email you.\n${link}`,

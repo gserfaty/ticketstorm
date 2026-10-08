@@ -14,7 +14,8 @@ const { alertUser, runAlerts, unsubToken, unsubscribe, verifyUnsub, emailUser } 
 const { runJobs } = await import('../lib/jobs.ts')
 const { prefsOf, saveAlertArea } = await import('../lib/account.ts')
 const { toggleFavorite } = await import('../lib/favorites.ts')
-const { publishEvent, createEvent } = await import('../lib/organizer.ts')
+const organizerLib = await import('../lib/organizer.ts')
+const { publishEvent, createEvent } = organizerLib
 const { parseFilters, searchEvents, score, recommendedEvents } = await import('../lib/events.ts')
 const { createAdaRequest } = await import('../lib/support.ts')
 const { UserError } = await import('../lib/platform.ts')
@@ -28,7 +29,7 @@ const day = 864e5
 // ---------- ICS ----------
 test('ICS: UTC times, stamp, uid, escaped text, folded lines, CRLF', () => {
   assert.equal(icsDate('2026-10-08T20:00:00.000Z'), '20261008T200000Z')
-  assert.equal(icsEscape('a,b;c\\d\ne'), 'a\\,b\;c\\\\d\\ne')
+  assert.equal(icsEscape('a,b;c\\d\ne'), 'a\\,b\\;c\\\\d\\ne')
   const ics = buildIcs(
     { id: 7, title: 'Rock, Paper; Scissors', starts_at: '2026-10-08T00:30:00.000Z', status: 'published', description: 'Line one\nLine two ' + 'x'.repeat(200), venue: 'The Hall', address: '1 Main St', city: 'Austin', state: 'TX' },
     'http://localhost:3000/events/rps',
@@ -36,7 +37,7 @@ test('ICS: UTC times, stamp, uid, escaped text, folded lines, CRLF', () => {
   )
   assert.ok(ics.endsWith('\r\n') && !/[^\r]\n/.test(ics), 'CRLF line endings only')
   assert.ok(ics.startsWith('BEGIN:VCALENDAR\r\nVERSION:2.0\r\n'))
-  for (const want of ['UID:event-7@ticketstorm', 'DTSTAMP:20260102T030405Z', 'DTSTART:20261008T003000Z', 'DTEND:20261008T033000Z', 'SUMMARY:Rock\\, Paper\; Scissors', 'STATUS:CONFIRMED']) {
+  for (const want of ['UID:event-7@ticketstorm', 'DTSTAMP:20260102T030405Z', 'DTSTART:20261008T003000Z', 'DTEND:20261008T033000Z', 'SUMMARY:Rock\\, Paper\\; Scissors', 'STATUS:CONFIRMED']) {
     assert.ok(ics.includes(want), want)
   }
   for (const line of ics.split('\r\n')) assert.ok(Buffer.byteLength(line) <= 75, `line too long: ${line.length}`)
@@ -78,7 +79,7 @@ test('unsubscribe token: verifies, rejects tampering, and turns one email catego
   assert.deepEqual(verifyUnsub(t), { userId: u, category: 'alerts' })
   const [id, cat, sig] = t.split('.')
   assert.equal(verifyUnsub(`${Number(id) + 1}.${cat}.${sig}`), undefined, 'other user')
-  assert.equal(verifyUnsub(`${id}.orders.${sig}`), undefined, 'other category')
+  assert.equal(verifyUnsub(`${id}.marketing.${sig}`), undefined, 'other category')
   assert.equal(verifyUnsub(`${id}.${cat}.${sig.replace(/.$/, sig.endsWith('0') ? '1' : '0')}`), undefined, 'flipped signature')
   assert.equal(verifyUnsub(`${id}.nonsense.${sig}`), undefined)
   assert.equal(verifyUnsub(''), undefined)
@@ -87,20 +88,25 @@ test('unsubscribe token: verifies, rejects tampering, and turns one email catego
   unsubscribe(u, 'alerts')
   const p = prefsOf(get<{ notif_prefs: string | null }>('SELECT notif_prefs FROM users WHERE id = ?', u).notif_prefs)
   assert.equal(p.alerts_email, false)
-  assert.equal(p.orders_email, true, 'other categories untouched')
+  assert.equal(p.marketing_email, undefined, 'other categories untouched')
   assert.equal(p.alerts_inapp, true)
 })
 
-test('every email to a user carries an unsubscribe link and honours the category preference', () => {
+test('optional email carries an unsubscribe link and honours the preference; essential order mail is not a preference', () => {
   const u = user('mail')
   const before = all('SELECT * FROM outbox').length
-  assert.equal(emailUser(u, 'orders', 'mail@x.test', 'Hi', 'Body'), true)
+  assert.equal(emailUser(u, 'alerts', 'mail@x.test', 'Hi', 'Body'), true)
   const m = get<{ body: string }>('SELECT body FROM outbox ORDER BY id DESC')
-  assert.match(m.body, /\/unsubscribe\?t=\d+\.orders\.[0-9a-f]{64}/)
-  unsubscribe(u, 'orders')
-  assert.equal(emailUser(u, 'orders', 'mail@x.test', 'Hi', 'Body'), false)
+  assert.match(m.body, /\/unsubscribe\?t=\d+\.alerts\.[0-9a-f]{64}/)
+  unsubscribe(u, 'alerts')
+  assert.equal(emailUser(u, 'alerts', 'mail@x.test', 'Hi', 'Body'), false)
   assert.equal(all('SELECT * FROM outbox').length, before + 1)
-  assert.equal(emailUser(null, 'orders', 'guest@x.test', 'Hi', 'Body'), true, 'guests have no preferences')
+  assert.equal(verifyUnsub(unsubToken(u, 'orders')), undefined, 'orders is not an unsubscribable category')
+  // essential: an order alert still reaches the inbox with everything off, and its mail has no footer
+  db.prepare('UPDATE users SET notif_prefs = ? WHERE id = ?').run(JSON.stringify({ alerts_email: false, alerts_inapp: false, alerts_sms: false }), u)
+  assert.equal(alertUser(u, 'orders', 'ticket_delivered', 'order:1', { title: 'Essential', link: '/x' }), true)
+  assert.equal(all("SELECT * FROM notifications WHERE user_id = ? AND title = 'Essential'", u).length, 1)
+  assert.doesNotMatch(get<{ body: string }>("SELECT body FROM outbox WHERE subject = 'Essential'").body, /unsubscribe/)
 })
 
 // ---------- alerts ----------
@@ -296,4 +302,17 @@ test('ADA request creates a support ticket and validates input', () => {
   assert.throws(() => createAdaRequest(null, { email: 'nope', name: '', need: 'Wheelchair space', details: 'x' }), UserError)
   assert.throws(() => createAdaRequest(null, { email: 'a@b.co', name: '', need: 'Teleport', details: 'x' }), UserError)
   assert.throws(() => createAdaRequest(null, { email: 'a@b.co', name: '', need: 'Other', details: '' }), UserError)
+})
+
+test('organizer event details: validated, other info keys kept', () => {
+  const { setEventInfo } = organizerLib
+  const ev = makeEvent('info-ev', 5000)
+  db.prepare("UPDATE events SET info = ? WHERE id = ?").run(JSON.stringify({ keep: 1 }), ev)
+  setEventInfo(ev, { age: '18+', bag: 'No bags', notices: '<b>Gate C</b> closed', setTimes: '19:30 Opener\n20:45 Headliner' })
+  const info = JSON.parse(get<{ info: string }>('SELECT info FROM events WHERE id = ?', ev).info)
+  assert.deepEqual(info.set_times, [{ act: 'Opener', time: '19:30' }, { act: 'Headliner', time: '20:45' }])
+  assert.equal(info.keep, 1)
+  assert.equal(info.notices, '<b>Gate C</b> closed', 'stored as text; React escapes it when rendered')
+  assert.throws(() => setEventInfo(ev, { age: '', bag: '', notices: '', setTimes: '25:00 Late' }), UserError)
+  assert.throws(() => setEventInfo(ev, { age: '', bag: '', notices: 'x'.repeat(501), setTimes: '' }), UserError)
 })

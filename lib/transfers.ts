@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { db, tx } from './db.ts'
 import { HoldError } from './inventory.ts'
-import { alertUser, emailUser } from './alerts.ts'
+import { alertUser } from './alerts.ts'
 import { APP_URL, notify, sendEmail, sendSms } from './notify.ts'
 import { assertTradable } from './resale.ts'
 
@@ -39,10 +39,8 @@ export function createTransfer(userId: number, ticketId: number, to: string): nu
     if (email) {
       const text = `${who} sent you a ticket on TicketStorm. Log in or sign up to claim it (valid ${DAYS} days):\n${link}`
       const u = db.prepare("SELECT id FROM users WHERE email = ? AND status = 'active'").get(email) as { id: number } | undefined
-      if (u) {
-        emailUser(u.id, 'orders', email, `${who} sent you a ticket`, text)
-        alertUser(u.id, 'orders', 'transfer_received', `transfer:${id}`, { title: `${who} sent you a ticket`, link: `/transfers/${id}?token=${token}` }, { email: false })
-      } else sendEmail(email, `${who} sent you a ticket`, text)
+      sendEmail(email, `${who} sent you a ticket`, text)
+      if (u) alertUser(u.id, 'orders', 'transfer_received', `transfer:${id}`, { title: `${who} sent you a ticket`, link: `/transfers/${id}?token=${token}` }, { email: false })
     } else sendSms(phone!, `${who} sent you a TicketStorm ticket. Claim it: ${link}`)
     return id
   })

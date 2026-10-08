@@ -26,13 +26,14 @@ export function deleteCard(userId: number, cardId: number) {
   if (db.prepare('DELETE FROM saved_cards WHERE id = ? AND user_id = ?').run(cardId, userId).changes !== 1) throw new UserError('Card not found')
 }
 
-export const PREF_CATEGORIES = ['orders', 'alerts', 'marketing']
+// Optional messages only. Order, ticket, transfer and event-change messages are essential: always sent, no preference, no unsubscribe.
+export const PREF_CATEGORIES = ['alerts', 'marketing']
 export const PREF_CHANNELS = ['inapp', 'email', 'sms']
-export const PREF_LABELS: Record<string, string> = { orders: 'Orders and tickets', alerts: 'Event alerts', marketing: 'News and offers' }
+export const PREF_LABELS: Record<string, string> = { alerts: 'Event alerts', marketing: 'News and offers' }
 export type Prefs = Record<string, boolean>
-// default: inbox always on, order and alert mail on, marketing mail off, SMS off
+// default: inbox on, alert mail on, marketing mail off, SMS off
 export const prefsOf = (json: string | null): Prefs => ({
-  orders_inapp: true, alerts_inapp: true, marketing_inapp: true, orders_email: true, alerts_email: true, ...(json ? JSON.parse(json) : {}),
+  alerts_inapp: true, marketing_inapp: true, alerts_email: true, ...(json ? JSON.parse(json) : {}),
 })
 export function savePrefs(userId: number, checked: string[]) {
   const prefs: Prefs = {}

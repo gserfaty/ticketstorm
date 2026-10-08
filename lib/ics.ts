@@ -1,6 +1,6 @@
 // iCalendar (RFC 5545) for one event. Pure: no DB, no clock except the `now` argument.
 // Text values escape \ ; , and newlines (section 3.3.11); lines fold at 75 octets with CRLF + space (3.1).
-export const icsEscape = (s: string) => s.replace(/\\/g, '\\\\').replace(/;/g, '\;').replace(/,/g, '\\,').replace(/\r\n|\r|\n/g, '\\n')
+export const icsEscape = (s: string) => s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r\n|\r|\n/g, '\\n')
 
 // 20261008T200000Z
 export const icsDate = (iso: string) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')

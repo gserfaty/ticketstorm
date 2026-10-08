@@ -4,7 +4,7 @@ import type { City } from '../lib/geo.ts'
 
 const dollars = (c?: number) => (c === undefined ? '' : String(c / 100))
 
-export default function Filters({ f, cities, genres, venues, allIn }: { f: F; cities: City[]; genres: string[]; venues: { slug: string; name: string }[]; allIn: boolean }) {
+export default function Filters({ f, cities, genres, venues, allIn, canDistance }: { f: F; cities: City[]; genres: string[]; venues: { slug: string; name: string }[]; allIn: boolean; canDistance: boolean }) {
   return (
     <form action="/search" className="filters">
       <input name="q" type="search" defaultValue={f.q} placeholder="Search" aria-label="Search" />
@@ -47,7 +47,7 @@ export default function Filters({ f, cities, genres, venues, allIn }: { f: F; ci
         <option value="">Sort: best match</option>
         <option value="date">Date</option>
         <option value="price">Price (low to high)</option>
-        <option value="distance">Distance</option>
+        {canDistance && <option value="distance">Distance</option>}
         <option value="popularity">Popularity</option>
       </select>
       <button>Search</button>

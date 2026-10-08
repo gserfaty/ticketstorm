@@ -31,14 +31,11 @@ export function unsubscribe(userId: number, category: string) {
 
 const prefsFor = (userId: number): Prefs => prefsOf((db.prepare('SELECT notif_prefs FROM users WHERE id = ?').get(userId) as { notif_prefs: string | null }).notif_prefs)
 
-// Every email to a registered user goes through here: it respects that user's email preference for the category and carries the
-// unsubscribe link. Guests (userId null) have no preferences and get the mail as written.
-export function emailUser(userId: number | null, category: string, to: string, subject: string, body: string): boolean {
-  if (userId !== null) {
-    if (!prefsFor(userId)[`${category}_email`]) return false
-    body += footer(userId, category)
-  }
-  sendEmail(to, subject, body)
+// Optional email (alerts, marketing) to a registered user: respects that user's preference for the category and carries the unsubscribe link.
+// Essential mail (orders, tickets, transfers, event changes) uses sendEmail directly: always sent, no footer.
+export function emailUser(userId: number, category: string, to: string, subject: string, body: string): boolean {
+  if (!prefsFor(userId)[`${category}_email`]) return false
+  sendEmail(to, subject, body + footer(userId, category))
   return true
 }
 
@@ -49,9 +46,14 @@ export function alertUser(userId: number, category: string, kind: string, ref: s
   const u = db.prepare("SELECT email, phone FROM users WHERE id = ? AND status = 'active'").get(userId) as { email: string; phone: string | null } | undefined
   if (!u || db.prepare('INSERT OR IGNORE INTO alerts_sent (user_id, kind, ref) VALUES (?,?,?)').run(userId, kind, ref).changes !== 1) return false
   const p = prefsFor(userId)
-  if (p[`${category}_inapp`]) notify(userId, kind, m.title, m.body ?? '', m.link)
-  if (o.email !== false) emailUser(userId, category, u.email, m.title, `${m.body ?? m.title}\n${APP_URL}${m.link}`)
-  if (p[`${category}_sms`] && u.phone) sendSms(u.phone, `TicketStorm: ${m.title} ${APP_URL}${m.link}`)
+  const essential = category === 'orders' // no preference: inbox always, mail without footer, no SMS
+  if (essential || p[`${category}_inapp`]) notify(userId, kind, m.title, m.body ?? '', m.link)
+  const text = `${m.body ?? m.title}\n${APP_URL}${m.link}`
+  if (o.email !== false) {
+    if (essential) sendEmail(u.email, m.title, text)
+    else emailUser(userId, category, u.email, m.title, text)
+  }
+  if (!essential && p[`${category}_sms`] && u.phone) sendSms(u.phone, `TicketStorm: ${m.title} ${APP_URL}${m.link}`)
   return true
 }
 
@@ -92,6 +94,7 @@ function newEvents() {
   }
 }
 
+// ponytail: reminders only fire if the jobs run inside the hour before on-sale (the layout runs them at most every 30s while anyone browses; `npm run jobs` otherwise). A cron every few minutes would make it dependable.
 // Tickets go on sale within the next hour, for fans of the event, its venue or one of its artists.
 function onsaleSoon(now: number) {
   const soon = fans('onsale_soon', ['event', 'venue', 'artist'], 'e.onsale_at > ? AND e.onsale_at <= ?', [new Date(now).toISOString(), new Date(now + 3_600_000).toISOString()])

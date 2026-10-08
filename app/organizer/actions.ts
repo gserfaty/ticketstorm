@@ -87,6 +87,11 @@ export async function saveEvent(f: FormData) {
   run(e.back, () => { org.updateEvent(e.id, eventForm(f, e.tz)); audit(e.user.id, 'event.update', `event:${e.id}`) })
 }
 
+export async function saveInfo(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { org.setEventInfo(e.id, { age: text(f, 'age'), bag: text(f, 'bag'), notices: text(f, 'notices'), setTimes: String(f.get('setTimes') ?? '') }); audit(e.user.id, 'event.info', `event:${e.id}`) })
+}
+
 export async function publish(f: FormData) {
   const e = await authEvent(f)
   run(e.back, () => { org.publishEvent(e.id); audit(e.user.id, 'event.publish', `event:${e.id}`) }, 'Published')

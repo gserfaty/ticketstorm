@@ -2,6 +2,19 @@
 
 All notable changes, newest first. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no version numbers yet; each section is a commit. Review-fix commits are grouped under their phase.
 
+## P10 review fixes
+
+#### Fixed
+- **ICS semicolons were never escaped**: `'\;'` in a JS string is just `;`, so the earlier entry's claim that `;` was escaped was wrong (and the test expectation matched the bug). `icsEscape` now emits `\;`; tests corrected.
+- **GET unsubscribed**: mail scanners and link previews fetch links. `GET /unsubscribe?t=` now only shows a one-button confirm form; only POST (same signed token, also what one-click unsubscribe sends) changes preferences.
+- **Preferences suppressed essential mail**: with order mail off, confirmations, cancel/postpone notices and transfer claim links were not sent. Order, ticket, transfer and event-change messages are essential: always sent, no footer, no preference. `PREF_CATEGORIES` is now `alerts` and `marketing` only (the misleading orders toggles are gone from `/account/notifications`; `orders_*` keys are ignored); `orders`-category alerts always reach the inbox; unsubscribe tokens for `orders` are rejected. `emailUser` is only for optional mail (alerts, marketing). Correction to the P10 entry below: event-change, confirmation and transfer emails no longer go through it.
+- **Organizers could not set age, bag policy, set times or notices**: the event edit page has an "Event page details" form (`setEventInfo`: length limits, set times one per line as `HH:MM Act`, other `info` keys kept, org-scoped through `authEvent`, audited as `event.info`). Notices are stored as text and escaped on render (checked with a `<script>` notice).
+- **Resale filter** is driven from the event's inventory (`inventory_status` index) to its listed ticket (`one_live_ticket`) to the listing (`one_active_listing`); `EXPLAIN QUERY PLAN` shows no scan of all listings.
+- **`sort=distance` without a city** silently sorted by date: the option is hidden unless a city filter or city cookie exists, and a direct URL shows "Pick a city to sort by distance".
+- Documented (`ponytail:`) that on-sale reminders need the jobs to run inside the hour before on-sale.
+
+---
+
 ## P10: Discovery, content pages, notifications, accessibility
 
 102 tests (13 new, in `tests/p10.test.ts`); `typecheck`, `test` and `build` green. All acceptance checks were also run against a live dev server with a scripted client (56 checks: filters and sorts, ICS, event/venue/artist pages, alert pipeline with `npm run jobs`, unsubscribe, companion holds, ADA form).

@@ -1,17 +1,18 @@
 import Link from 'next/link'
 import Flash from '../../../../../components/Flash.tsx'
 import { db } from '../../../../../lib/db.ts'
-import { CATEGORIES } from '../../../../../lib/events.ts'
+import { CATEGORIES, eventInfo } from '../../../../../lib/events.ts'
 import { fmtDateTimeTz, toLocalInput } from '../../../../../lib/format.ts'
 import { attendance } from '../../../../../lib/scan.ts'
 import { loadEvent } from '../../../guard.ts'
-import { cancelEvent, changeDate, publish, saveEvent } from '../../../actions.ts'
+import { cancelEvent, changeDate, publish, saveEvent, saveInfo } from '../../../actions.ts'
 
 export const dynamic = 'force-dynamic'
 
 export default async function ManageEvent({ params, searchParams }: { params: Promise<{ orgId: string; id: string }>; searchParams: Promise<{ error?: string; notice?: string }> }) {
   const { orgId, id } = await params
   const { e } = await loadEvent(orgId, id)
+  const info = eventInfo((db.prepare('SELECT info FROM events WHERE id = ?').get(e.id) as { info: string | null }).info)
   const base = `/organizer/${orgId}/events/${e.id}`
   const draft = e.status === 'draft'
   const live = ['published', 'postponed', 'rescheduled'].includes(e.status)
@@ -44,6 +45,16 @@ export default async function ManageEvent({ params, searchParams }: { params: Pr
         <input name="image" defaultValue={e.image ?? ''} placeholder="Image URL" />
         <textarea name="description" defaultValue={e.description ?? ''} rows={4} />
         <button>Save</button>
+      </form>
+
+      <h2>Event page details</h2>
+      <form action={saveInfo} className="stack">
+        {hidden}
+        <input name="age" defaultValue={info.age ?? ''} placeholder="Age limit (e.g. All ages, 18+)" maxLength={60} />
+        <input name="bag" defaultValue={info.bag ?? ''} placeholder="Bag policy" maxLength={200} />
+        <textarea name="notices" defaultValue={info.notices ?? ''} rows={2} maxLength={500} placeholder="Notice banner (parking, gate changes...)" />
+        <textarea name="setTimes" defaultValue={(info.set_times ?? []).map((t) => `${t.time} ${t.act}`).join('\n')} rows={3} placeholder={'One per line, venue time: 20:30 Headliner'} />
+        <button>Save details</button>
       </form>
 
       {draft && (

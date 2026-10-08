@@ -133,8 +133,10 @@ export function searchEvents(f: Filters, limit = 60, opt: { allIn?: boolean; ref
     args.push(now)
   }
   if (f.resale) {
-    where.push(`EXISTS (SELECT 1 FROM listings l JOIN tickets t ON t.id = l.ticket_id JOIN inventory i ON i.id = t.inventory_id
-      WHERE l.status = 'active' AND l.expires_at > ? AND t.status = 'listed' AND i.event_id = e.id)`)
+    // (the redundant status IN (...) lets SQLite use the partial index one_live_ticket(inventory_id))
+    // driven from this event's inventory (event_id index) -> its listed ticket -> the listing, so it never scans all listings
+    where.push(`EXISTS (SELECT 1 FROM inventory i JOIN tickets t ON t.inventory_id = i.id AND t.status IN ('valid','listed','used') AND t.status = 'listed' JOIN listings l ON l.ticket_id = t.id
+      WHERE i.event_id = e.id AND i.status = 'sold' AND l.status = 'active' AND l.expires_at > ?)`)
     args.push(now)
   }
   if (f.presale) {

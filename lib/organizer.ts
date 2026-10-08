@@ -3,8 +3,7 @@ import { db, tx } from './db.ts'
 import { CATEGORIES } from './events.ts'
 import { fmtDateTimeTz, slugify } from './format.ts'
 import { generateInventory } from './inventory.ts'
-import { emailUser } from './alerts.ts'
-import { notify, APP_URL } from './notify.ts'
+import { notify, sendEmail, APP_URL } from './notify.ts'
 import { flagOn, UserError } from './platform.ts'
 import { generateVenue, venueCapacity } from './venue-gen.ts'
 import type { GenSection, VenueKind } from './venue-gen.ts'
@@ -60,6 +59,24 @@ export function createEvent(orgId: number, f: EventForm, artistId?: number): num
   return id
 }
 
+// Public event-page details (events.info JSON). Set times: one per line, "HH:MM Act" in venue time. Other keys in info are kept.
+export function setEventInfo(eventId: number, f: { age: string; bag: string; notices: string; setTimes: string }) {
+  if (f.age.length > 60) throw new UserError('Age limit is limited to 60 characters')
+  if (f.bag.length > 200) throw new UserError('Bag policy is limited to 200 characters')
+  if (f.notices.length > 500) throw new UserError('Notices are limited to 500 characters')
+  const lines = f.setTimes.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (lines.length > 12) throw new UserError('At most 12 set times')
+  const set_times = lines.map((l) => {
+    const m = /^([01]\d|2[0-3]):([0-5]\d)\s+(.{1,80})$/.exec(l)
+    if (!m) throw new UserError(`Set time "${l.slice(0, 40)}" must look like "20:30 Headliner"`)
+    return { act: m[3], time: `${m[1]}:${m[2]}` }
+  })
+  const cur = db.prepare('SELECT info FROM events WHERE id = ?').get(eventId) as { info: string | null }
+  let info: Record<string, unknown> = {}
+  try { info = cur.info ? JSON.parse(cur.info) : {} } catch {}
+  db.prepare('UPDATE events SET info = ? WHERE id = ?').run(JSON.stringify({ ...info, age: f.age, bag: f.bag, notices: f.notices, set_times }), eventId)
+}
+
 // Venue and start time are only editable while a draft; after that use reschedule.
 export function updateEvent(eventId: number, f: EventForm) {
   const ev = db.prepare('SELECT org_id, status, venue_id, starts_at FROM events WHERE id = ?').get(eventId) as { org_id: number; status: string; venue_id: number; starts_at: string }
@@ -112,7 +129,7 @@ export function changeDate(eventId: number, kind: 'postponed' | 'rescheduled', n
       )
       .all(eventId) as { id: number; email: string; user_id: number | null; access_token: string }[]
     for (const h of holders) {
-      emailUser(h.user_id, 'orders', h.email, `${ev.title} has been ${kind}`, `${ev.title} has been ${kind} (${when}). Your tickets remain valid.\n${APP_URL}/orders/${h.id}${h.user_id ? '' : `?t=${h.access_token}`}`)
+      sendEmail(h.email, `${ev.title} has been ${kind}`, `${ev.title} has been ${kind} (${when}). Your tickets remain valid.\n${APP_URL}/orders/${h.id}${h.user_id ? '' : `?t=${h.access_token}`}`)
       if (h.user_id) notify(h.user_id, 'order', `${ev.title} has been ${kind}`, 'Your tickets remain valid.', `/orders/${h.id}`)
     }
     // current holders who are not the buyer (transfers, resale)
