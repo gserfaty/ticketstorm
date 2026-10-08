@@ -22,7 +22,7 @@ export default async function Guests({ params }: { params: Promise<{ orgId: stri
         <tbody>
           {g.map((x) => (
             <tr key={x.ticket_id}>
-              <td>{x.name}</td>
+              <td>{x.guest}</td>
               <td>{x.row ? `${x.section} ${x.row}-${x.number}` : `GA ${x.section}`}</td>
               <td>{x.delivery === 'willcall' ? (x.picked_up_at ? `will-call, picked up ${fmtDateTime(x.picked_up_at, e.tz)}` : 'WILL-CALL: not picked up') : x.delivery}</td>
               <td>{x.status === 'used' ? 'checked in' : x.status === 'listed' ? 'listed for resale' : 'not yet'}</td>

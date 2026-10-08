@@ -12,4 +12,4 @@ export function middleware(req: NextRequest) {
   return res
 }
 
-export const config = { matcher: ['/((?!_next/|api/|favicon).*)'] }
+export const config = { matcher: ['/((?!_next/|api/|embed/|favicon).*)'] }

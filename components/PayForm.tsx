@@ -79,16 +79,16 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
       <input type="hidden" name="key" value={idemKey} />
       <input type="hidden" name="method" value={method} />
       <h2>{labels['co.contact']}</h2>
-      {email ? <p>{labels['co.sentto']} <strong>{email}</strong></p> : <input name="email" type="email" defaultValue={v.email} placeholder="Email (for your tickets)" required autoComplete="email" />}
+      {email ? <p>{labels['co.sentto']} <strong>{email}</strong></p> : <input name="email" type="email" defaultValue={v.email} placeholder="Email (for your tickets)" aria-label="Email" required autoComplete="email" />}
       {deliveries.length > 1 ? (
         <label>Delivery <select name="delivery" defaultValue="mobile">{deliveries.map(([k, name]) => <option key={k} value={k}>{name}</option>)}</select></label>
       ) : <p className="muted">Delivery: Mobile ticket</p>}
       {express && <p className="notice">Express checkout: your default card and saved address are filled in. Re-enter the card&apos;s CVC and press Pay.</p>}
       <h2>{labels['co.billing']}</h2>
-      <input name="bname" defaultValue={v.bname} placeholder="Full name" required autoComplete="name" />
-      <input name="baddress" defaultValue={v.baddress} placeholder="Street address" required autoComplete="street-address" />
-      <input name="bcity" defaultValue={v.bcity} placeholder="City" required autoComplete="address-level2" />
-      <input name="bzip" defaultValue={v.bzip} placeholder="ZIP" required autoComplete="postal-code" />
+      <input name="bname" defaultValue={v.bname} placeholder="Full name" aria-label="Full name" required autoComplete="name" />
+      <input name="baddress" defaultValue={v.baddress} placeholder="Street address" aria-label="Street address" required autoComplete="street-address" />
+      <input name="bcity" defaultValue={v.bcity} placeholder="City" aria-label="City" required autoComplete="address-level2" />
+      <input name="bzip" defaultValue={v.bzip} placeholder="ZIP" aria-label="ZIP code" required autoComplete="postal-code" />
       <h2>{labels['co.stored']}</h2>
       <input name="giftcode" placeholder={labels['co.giftcode']} aria-label="Gift card code" autoComplete="off" />
       {!!creditCents && <label><input type="checkbox" name="usecredit" /> {labels['co.usecredit']} (${(creditCents / 100).toFixed(2)} available)</label>}
@@ -105,9 +105,9 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
               {saved.map((c) => <option key={c.id} value={c.id}>{c.brand} ending {c.last4} ({c.exp})</option>)}
             </select>
           )}
-          <input name="number" placeholder={labels['co.cardnumber']} inputMode="numeric" autoComplete="cc-number" />
-          <input name="exp" placeholder="MM/YY" autoComplete="cc-exp" />
-          <input name="cvc" placeholder="CVC (also needed for a saved card)" inputMode="numeric" autoComplete="cc-csc" required={express} />
+          <input name="number" placeholder={labels['co.cardnumber']} inputMode="numeric" aria-label="Card number" autoComplete="cc-number" />
+          <input name="exp" placeholder="MM/YY" aria-label="Expiry date" autoComplete="cc-exp" />
+          <input name="cvc" placeholder="CVC (also needed for a saved card)" inputMode="numeric" aria-label="Card security code (CVC)" autoComplete="cc-csc" required={express} />
           {canSave && <label><input type="checkbox" name="save" /> Save this card</label>}
           <p className="muted">Test cards: 4242 4242 4242 4242 pays, 4000 0000 0000 0002 declines, 4000 0000 0000 3220 asks for 3D Secure.</p>
         </>

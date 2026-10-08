@@ -60,6 +60,7 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [view, setView] = useState<number | null>(null) // seat shown in the "view from seat" panel
+  const [rove, setRove] = useState<number | null>(null) // the one seat in the Tab order (roving tabindex); arrow keys move it
   const svg = useRef<SVGSVGElement>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const drag = useRef<{ cx: number; cy: number; vb: VB; moved: boolean } | null>(null)
@@ -168,10 +169,41 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
     setTip({ x: e.clientX - r.left, y: e.clientY - r.top, text })
   }
 
-  function openSection(s: MapSection) {
+  function openSection(s: MapSection, fromKeyboard = false) {
     if (dragged.current) return void (dragged.current = false)
     setOpen(s.id)
     setVb(bbox(s.path))
+    // keyboard users land on the first seat of the section, so they do not tab through every section label to reach it
+    if (fromKeyboard) setTimeout(() => svg.current?.querySelector<SVGGElement>(`[data-sec="${s.id}"]`)?.focus(), 50)
+  }
+  // Arrow keys move focus to the nearest seat in that direction (same section); Enter / Space select it; Escape goes back to the section.
+  function seatKeys(e: RKeyboardEvent, seat: MapSeat, activate: () => void) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      dragged.current = false
+      return activate()
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setOpen(null)
+      setVb(FULL)
+      return void setTimeout(() => svg.current?.querySelector<SVGGElement>(`[data-section="${seat[1]}"]`)?.focus(), 50)
+    }
+    const dir = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] }[e.key]
+    if (!dir) return
+    e.preventDefault()
+    let best: MapSeat | undefined
+    let bestScore = Infinity
+    for (const o of bySection.get(seat[1]) ?? []) {
+      const dx = (o[4] - seat[4]) * dir[0]
+      const dy = (o[5] - seat[5]) * dir[1]
+      const along = dx + dy
+      const across = Math.abs((o[4] - seat[4]) * dir[1]) + Math.abs((o[5] - seat[5]) * dir[0])
+      if (o === seat || along <= 0.01) continue
+      const score = along + across * 2
+      if (score < bestScore) (best = o, (bestScore = score))
+    }
+    if (best) svg.current?.querySelector<SVGGElement>(`[data-seat="${best[0]}"]`)?.focus()
   }
   function clickSeat(id: number) {
     if (dragged.current) return void (dragged.current = false)
@@ -212,6 +244,7 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
 
   const dimmed = (id: number, flags: number) => (adaOnly && !(flags & 3)) || price(id) > maxPrice
   const visible = (s: MapSeat) => s[1] === open || (adaOnly && (s[6] & 3) > 0)
+  const tabSeat = seats.find((x) => x[0] === rove && visible(x))?.[0] ?? seats.find(visible)?.[0] // roving tabindex: one tabbable seat
   const cur = open ? sectionById.get(open) : undefined
   const curGa = cur?.kind === 'ga' ? gaById.get(cur.id) : undefined
   const minC = Math.min(...levels.map((l) => l.cents))
@@ -263,7 +296,7 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
             const free = g ? g.free : ss.filter((x) => status.get(x[0])?.[1] === 'a').length
             const off = free === 0 || (lv?.cents ?? 0) > maxPrice
             return (
-              <g key={s.id} className={`sec ${open === s.id ? 'open' : ''}`} onClick={() => openSection(s)} {...key(() => openSection(s))}
+              <g key={s.id} data-section={s.id} className={`sec ${open === s.id ? 'open' : ''}`} onClick={() => openSection(s)} {...key(() => openSection(s, true))}
                 aria-label={`${s.kind === 'ga' ? 'General admission' : 'Section'} ${s.name}, ${free} available`}
                 onPointerMove={(e) => showTip(e, `${s.kind === 'ga' ? 'General admission ' : 'Section '}${s.name} · ${lv ? usd(lv.cents) : ''} · ${free} available`)} onPointerLeave={() => setTip(null)}>
                 <path d={s.path} fill={off ? '#2a2d45' : (lv?.color ?? '#3b82f6')} fillOpacity={open === s.id ? 0.18 : off ? 0.5 : 0.55} stroke="#9aa" strokeWidth={1} />
@@ -279,8 +312,10 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
             const dim = dimmed(id, flags)
             const can = state === 'a' && !dim && !hold
             return (
-              <g key={id} opacity={dim ? 0.2 : 1} className={`seat st-${state} ${flags & 3 ? 'ada' : ''} ${flags & 4 ? 'ltd' : ''}`} onClick={() => can || state === 'sel' ? clickSeat(id) : undefined} {...key(() => can || state === 'sel' ? clickSeat(id) : undefined)}
-                onFocus={() => setView(id)} aria-label={`${seatLabel(s)}${flags & 4 ? ', limited view' : ''}, ${state === 'r' ? '' : usd(price(id)) + ', '}${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', r: 'verified resale', sel: 'selected', mine: 'yours' }[state]}`}
+              <g key={id} data-seat={id} data-sec={sid} opacity={dim ? 0.2 : 1} className={`seat st-${state} ${flags & 3 ? 'ada' : ''} ${flags & 4 ? 'ltd' : ''}`} onClick={() => can || state === 'sel' ? clickSeat(id) : undefined}
+                role="button" aria-pressed={state === 'sel' || state === 'mine'} aria-disabled={!(can || state === 'sel')} tabIndex={id === tabSeat ? 0 : -1}
+                onKeyDown={(e) => seatKeys(e, s, () => (can || state === 'sel' ? clickSeat(id) : undefined))}
+                onFocus={() => { setView(id); setRove(id) }} aria-label={`${seatLabel(s)}${flags & 4 ? ', limited view' : ''}, ${state === 'r' ? '' : usd(price(id)) + ', '}${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', r: 'verified resale', sel: 'selected', mine: 'yours' }[state]}`}
                 onPointerMove={(e) => { setView(id); showTip(e, `${seatLabel(s)}${state === 'r' ? '' : ' · ' + usd(price(id))}${flags & 1 ? ' · ♿ accessible' : flags & 2 ? ' · companion' : ''}${flags & 4 ? ' · limited view' : ''} · ${{ a: 'available', h: 'held', s: 'sold', b: 'unavailable', r: 'verified resale', sel: 'selected', mine: 'yours' }[state]}`) }} onPointerLeave={() => setTip(null)}>
                 <circle cx={x} cy={y} r={r} fill={state === 'a' ? (levelById.get(st?.[2] ?? 0)?.color ?? '#3b82f6') : undefined} />
                 {(flags & 1) > 0 && <text x={x} y={y} fontSize={r * 1.5} textAnchor="middle" dominantBaseline="central" pointerEvents="none">♿</text>}
@@ -319,7 +354,7 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
       </aside>
       </div>
 
-      <p className="muted">{live ? 'Live seat updates on.' : 'Seat updates refresh every few seconds.'} Hover or focus a seat to preview the view.</p>
+      <p className="muted">{live ? 'Live seat updates on.' : 'Seat updates refresh every few seconds.'} Hover or focus a seat to preview the view. Keyboard: Tab to a section and press Enter, move between seats with the arrow keys, Enter selects, Escape goes back to the sections.</p>
       <ul className="legend">
         {levels.map((l) => <li key={l.id} title={l.perks ?? undefined}><i style={{ background: l.color ?? '#3b82f6' }} /> {l.name} {usd(l.cents)}</li>)}
         <li><i className="st-sel" /> Selected</li>

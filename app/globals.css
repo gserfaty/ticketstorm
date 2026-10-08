@@ -8,7 +8,7 @@ main { max-width:1000px; margin:0 auto; padding:1rem }
 .search { flex:1; min-width:180px }
 .search input { width:100% }
 input, select, button { font:inherit; padding:.4rem .6rem; border-radius:6px; border:1px solid #445; background:#0b0c1a; color:var(--fg) }
-button { background:var(--accent); border-color:var(--accent); cursor:pointer }
+button { background:#1d4ed8; border-color:#1d4ed8; color:#fff; cursor:pointer }
 .account { position:relative }
 .account summary { cursor:pointer }
 .account nav { position:absolute; right:0; z-index:2; display:flex; flex-direction:column; gap:.5rem; min-width:200px; padding:.75rem; background:var(--panel); border:1px solid #445; border-radius:6px }
@@ -21,7 +21,7 @@ pre { white-space:pre-wrap; word-break:break-word; margin:0 }
 .badge { font-size:.75rem; padding:.1rem .5rem; border-radius:99px; background:#334; vertical-align:middle }
 .badge.on-sale { background:var(--ok); color:#000 } .badge.cancelled, .badge.postponed { background:var(--bad); color:#000 }
 .genres { display:flex; gap:.5rem; flex-wrap:wrap } .genres .on { font-weight:700 }
-.hero { padding:1.5rem 1rem; background:linear-gradient(135deg,#3b82f6,#7c3aed); border-radius:12px; margin-bottom:1rem }
+.hero { padding:1.5rem 1rem; background:linear-gradient(135deg,#1d4ed8,#6d28d9); border-radius:12px; margin-bottom:1rem }
 .hero a { color:#fff } .hero .muted { color:#dde }
 .hero-img { max-width:100%; border-radius:8px }
 .buy { display:flex; gap:.75rem; align-items:center }
@@ -53,7 +53,7 @@ pre { white-space:pre-wrap; word-break:break-word; margin:0 }
 .card ul { padding-left:1.25rem }
 @media (max-width:800px) { .map-layout { grid-template-columns:1fr } .listview { max-height:none } }
 @media (max-width:600px) { main { padding:.5rem } .map-controls label, .map-controls select { flex:1 1 40% } }
-a.btn { display:inline-block; padding:.4rem .6rem; border-radius:6px; background:var(--accent); color:#fff; text-decoration:none }
+a.btn { display:inline-block; padding:.4rem .6rem; border-radius:6px; background:#1d4ed8; color:#fff; text-decoration:none }
 table td { padding:.15rem 1rem .15rem 0 }
 textarea { font:inherit; padding:.4rem .6rem; border-radius:6px; border:1px solid #445; background:#0b0c1a; color:var(--fg) }
 .scan-ok { color:var(--ok) } .scan-bad { color:var(--bad) }
@@ -94,3 +94,13 @@ nav.hdr-links { display:flex; gap:.75rem; align-items:center }
 .seat.ltd circle, .legend i.ltd { stroke:#fb923c; stroke-width:1.5; stroke-dasharray:2 1 }
 .legend i.ltd { background:transparent; border:2px dashed #fb923c }
 .listview h3 { margin:.75rem 0 .25rem; font-size:.95rem }
+
+/* P12B accessibility: skip link, visible keyboard focus everywhere (buttons, links, form fields and the SVG seat map), contrast of buttons >= 4.5:1 */
+.skip { position:absolute; left:.5rem; top:-4rem; z-index:10; background:#fff; color:#000; padding:.5rem .75rem; border-radius:6px; font-weight:600 }
+.skip:focus { top:.5rem }
+:focus-visible { outline:3px solid #facc15; outline-offset:2px }
+main:focus { outline:none }
+.seat:focus-visible, .sec:focus-visible { outline:none }
+.seat:focus-visible circle { stroke:#facc15; stroke-width:3 }
+.sec:focus-visible path { stroke:#facc15; stroke-width:3 }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior:auto !important; animation-duration:.01ms !important; transition-duration:.01ms !important } }

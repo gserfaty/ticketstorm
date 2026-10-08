@@ -36,10 +36,11 @@ export default async function VenuePage({ params, searchParams }: { params: Prom
   const user = await getUser()
   const sp = await searchParams
   // one middle seat per reserved section, drawn with the same generated view-from-seat as the seat map (an illustration, not a photo)
-  const views = db
-    .prepare(`SELECT s.name, st.x, st.y, st.row, st.number, st.obstructed FROM sections s JOIN seats st ON st.id = (SELECT id FROM seats WHERE section_id = s.id ORDER BY row, number LIMIT 1 OFFSET (SELECT count(*) / 2 FROM seats WHERE section_id = s.id))
-      WHERE s.venue_id = ? AND s.kind = 'reserved' ORDER BY s.rank, s.id LIMIT 6`)
-    .all(v!.id) as { name: string; x: number; y: number; row: string; number: number; obstructed: number }[]
+  const views = (db.prepare("SELECT id, name FROM sections WHERE venue_id = ? AND kind = 'reserved' ORDER BY rank, id LIMIT 6").all(v!.id) as { id: number; name: string }[]).flatMap((sec) => {
+    const n = (db.prepare('SELECT count(*) AS n FROM seats WHERE section_id = ?').get(sec.id) as { n: number }).n
+    const st = db.prepare('SELECT x, y, row, number, obstructed FROM seats WHERE section_id = ? ORDER BY row, number LIMIT 1 OFFSET ?').get(sec.id, n >> 1) as { x: number; y: number; row: string; number: number; obstructed: number } | undefined
+    return st ? [{ name: sec.name, ...st }] : []
+  })
   const tabs: [string, string | undefined][] = [['Parking', info.parking], ['Public transit', info.transit], ['Bag policy', info.bag]]
   return (
     <>

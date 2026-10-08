@@ -146,14 +146,14 @@ export function markPickedUp(orderId: number, staffId: number) {
 }
 
 // ---- guest list: everyone holding a live ticket for the door staff (name or email, seat, checked in or not, will-call pickup) ----
-export type Guest = { ticket_id: number; name: string; email: string; status: string; section: string; row: string | null; number: number | null; delivery: string; picked_up_at: string | null; order_id: number }
+export type Guest = { ticket_id: number; guest: string; email: string; status: string; section: string; row: string | null; number: number | null; delivery: string; picked_up_at: string | null; order_id: number }
 export function guestList(eventId: number): Guest[] {
   return db
     .prepare(
-      `SELECT t.id AS ticket_id, coalesce(nullif(u.name, ''), u.email, o.email) AS name, coalesce(u.email, o.email) AS email, t.status, s.name AS section, st.row, st.number, o.delivery, o.picked_up_at, o.id AS order_id
+      `SELECT t.id AS ticket_id, coalesce(nullif(u.name, ''), u.email, o.email) AS guest, coalesce(u.email, o.email) AS email, t.status, s.name AS section, st.row, st.number, o.delivery, o.picked_up_at, o.id AS order_id
        FROM tickets t JOIN inventory i ON i.id = t.inventory_id JOIN orders o ON o.id = t.order_id LEFT JOIN users u ON u.id = t.owner_id
        JOIN sections s ON s.id = i.section_id LEFT JOIN seats st ON st.id = i.seat_id
-       WHERE i.event_id = ? AND t.status IN ('valid','used','listed') AND o.status IN ('paid','partially_refunded') ORDER BY lower(name), t.id`,
+       WHERE i.event_id = ? AND t.status IN ('valid','used','listed') AND o.status IN ('paid','partially_refunded') ORDER BY lower(guest), t.id`,
     )
     .all(eventId)
     .map((r) => ({ ...r })) as Guest[]

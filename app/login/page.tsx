@@ -10,8 +10,8 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
       {notice && <p className="notice">{notice}</p>}
       <form action={loginAction} className="stack">
         <input type="hidden" name="next" value={next} />
-        <input name="email" type="email" placeholder="Email" required autoComplete="email" />
-        <input name="password" type="password" placeholder="Password" required autoComplete="current-password" />
+        <input name="email" type="email" placeholder="Email" aria-label="Email" required autoComplete="email" />
+        <input name="password" type="password" placeholder="Password" aria-label="Password" required autoComplete="current-password" />
         <button>Log in</button>
       </form>
       {socialEnabled() && (
