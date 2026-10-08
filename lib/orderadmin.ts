@@ -120,3 +120,27 @@ export function refundFromForm(orderId: number, mode: string, items: number[], f
   }
   return refundOrder(orderId, { reason })
 }
+
+// ---- will-call (box-office pickup) ----
+export type WillCall = { id: number; email: string; name: string | null; status: string; picked_up_at: string | null; picked_by: string | null; tickets: number }
+
+// Orders of the event that chose will-call delivery and still hold live tickets (or were already picked up).
+export function willCallOrders(eventId: number): WillCall[] {
+  return db
+    .prepare(
+      `SELECT o.id, o.email, u.name, o.status, o.picked_up_at, p.email AS picked_by,
+         (SELECT count(*) FROM tickets t WHERE t.order_id = o.id AND t.inventory_id IS NOT NULL AND t.status IN ('valid','used','listed')) AS tickets
+       FROM orders o LEFT JOIN users u ON u.id = o.user_id LEFT JOIN users p ON p.id = o.picked_up_by
+       WHERE o.event_id = ? AND o.delivery = 'willcall' AND o.status IN ('paid','review','partially_refunded') ORDER BY o.picked_up_at IS NOT NULL, o.id`,
+    )
+    .all(eventId) as WillCall[]
+}
+
+// Box office hands the tickets over. One conditional UPDATE: a second press (or a second box-office window) cannot pick the same order up twice.
+// Refused for orders under review: their tickets are on hold.
+export function markPickedUp(orderId: number, staffId: number) {
+  const r = db
+    .prepare("UPDATE orders SET picked_up_at = ?, picked_up_by = ? WHERE id = ? AND delivery = 'willcall' AND picked_up_at IS NULL AND status IN ('paid','partially_refunded')")
+    .run(new Date().toISOString(), staffId, orderId)
+  if (r.changes !== 1) throw new UserError('Not a will-call order that is ready for pickup (already picked up, under review, or refunded)')
+}

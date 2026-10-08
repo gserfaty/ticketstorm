@@ -33,7 +33,7 @@ async function nativeWallet(method: string, cents: number): Promise<boolean> {
 }
 
 // Card number and CVC are never given a `name` that is logged or stored server-side; they are read once by the pay action.
-export default function PayForm({ action, holdId, idemKey, expiresAt, email, saved, canSave, total, totalCents, installments, captcha }: {
+export default function PayForm({ action, holdId, idemKey, expiresAt, email, saved, canSave, total, totalCents, installments, captcha, deliveries, prefill, express }: {
   action: (prev: PayState, f: FormData) => Promise<PayState>
   holdId: number
   idemKey: string
@@ -45,13 +45,16 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
   totalCents: number
   installments: string[] | null // the four payments, e.g. ["$30.00", ...]; null = not offered for this order
   captcha: Captcha
+  deliveries: [string, string][] // [value, label] the event offers; mobile first
+  prefill?: { bname: string; baddress: string; bcity: string; bzip: string } // the account's saved address
+  express?: boolean // saved card (first in `saved`) and saved address are filled in; only the CVC is left to type
 }) {
   const router = useRouter()
   const [state, formAction] = useActionState(action, {} as PayState)
   const [method, setMethod] = useState('card')
   const [dialog, setDialog] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
-  const v = state.v ?? {}
+  const v: Record<string, string> = { ...prefill, ...state.v }
   const cap = state.captcha ?? captcha
   const wallet = WALLETS.includes(method)
   const label = METHODS.find((m) => m[0] === method)![1]
@@ -75,7 +78,10 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
       <input type="hidden" name="method" value={method} />
       <h2>Contact</h2>
       {email ? <p>Tickets will be sent to <strong>{email}</strong></p> : <input name="email" type="email" defaultValue={v.email} placeholder="Email (for your tickets)" required autoComplete="email" />}
-      <p className="muted">Delivery: Mobile ticket</p>
+      {deliveries.length > 1 ? (
+        <label>Delivery <select name="delivery" defaultValue="mobile">{deliveries.map(([k, name]) => <option key={k} value={k}>{name}</option>)}</select></label>
+      ) : <p className="muted">Delivery: Mobile ticket</p>}
+      {express && <p className="notice">Express checkout: your default card and saved address are filled in. Re-enter the card&apos;s CVC and press Pay.</p>}
       <h2>Billing address</h2>
       <input name="bname" defaultValue={v.bname} placeholder="Full name" required autoComplete="name" />
       <input name="baddress" defaultValue={v.baddress} placeholder="Street address" required autoComplete="street-address" />
@@ -88,14 +94,14 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
       {method === 'card' && (
         <>
           {saved.length > 0 && (
-            <select name="saved" defaultValue="" aria-label="Saved card">
+            <select name="saved" defaultValue={express ? String(saved[0].id) : ''} aria-label="Saved card">
               <option value="">New card</option>
               {saved.map((c) => <option key={c.id} value={c.id}>{c.brand} ending {c.last4} ({c.exp})</option>)}
             </select>
           )}
           <input name="number" placeholder="Card number" inputMode="numeric" autoComplete="cc-number" />
           <input name="exp" placeholder="MM/YY" autoComplete="cc-exp" />
-          <input name="cvc" placeholder="CVC" inputMode="numeric" autoComplete="cc-csc" />
+          <input name="cvc" placeholder="CVC (also needed for a saved card)" inputMode="numeric" autoComplete="cc-csc" required={express} />
           {canSave && <label><input type="checkbox" name="save" /> Save this card</label>}
           <p className="muted">Test cards: 4242 4242 4242 4242 pays, 4000 0000 0000 0002 declines, 4000 0000 0000 3220 asks for 3D Secure.</p>
         </>

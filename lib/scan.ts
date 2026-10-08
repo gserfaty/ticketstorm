@@ -1,5 +1,5 @@
 import { db } from './db.ts'
-import { tokenTicketId, verifyToken, WINDOW_MS } from './safetix.ts'
+import { isPrintToken, tokenTicketId, verifyPrintToken, verifyToken, WINDOW_MS } from './safetix.ts'
 import { fmtTime } from './format.ts'
 
 export type ScanResult = { result: 'valid' | 'used' | 'expired' | 'invalid' | 'wrong_event'; message: string; ticketId?: number }
@@ -15,17 +15,20 @@ export function scanTicket(eventId: number, token: string, scannerId: number, at
   const t = id
     ? (db
         .prepare(
-          `SELECT t.id, t.status, t.secret, t.scanned_at, o.status AS order_status, e.id AS event_id, v.tz, e.starts_at, e.doors_at, a.name AS addon
+          `SELECT t.id, t.status, t.secret, t.scanned_at, o.status AS order_status, e.id AS event_id, e.print_ok, v.tz, e.starts_at, e.doors_at, a.name AS addon
            FROM tickets t JOIN orders o ON o.id = t.order_id LEFT JOIN inventory i ON i.id = t.inventory_id LEFT JOIN addons a ON a.id = t.addon_id
            JOIN events e ON e.id = coalesce(i.event_id, a.event_id) JOIN venues v ON v.id = e.venue_id WHERE t.id = ?`,
         )
-        .get(id) as { id: number; status: string; secret: string; scanned_at: string | null; order_status: string; event_id: number; tz: string; starts_at: string; doors_at: string | null; addon: string | null } | undefined)
+        .get(id) as { id: number; status: string; secret: string; scanned_at: string | null; order_status: string; event_id: number; print_ok: number; tz: string; starts_at: string; doors_at: string | null; addon: string | null } | undefined)
     : undefined
   if (!t) return { result: 'invalid', message: 'Invalid code' }
   const open = Date.parse(t.doors_at ?? t.starts_at) - 6 * 3_600_000
   const at = atMs > now + 60_000 || atMs < open || atMs > Date.parse(t.starts_at) + 12 * 3_600_000 ? now : atMs
   if (t.event_id !== eventId) return { result: 'wrong_event', message: 'Ticket is for a different event', ticketId: t.id }
-  if (!verifyToken(token, t.secret, at)) {
+  if (isPrintToken(token)) {
+    // a printed code is static: only for events that allow print-at-home, and only the first scan admits it (the same conditional UPDATE below)
+    if (!t.print_ok || !verifyPrintToken(token, t.secret)) return { result: 'invalid', message: 'Invalid code' }
+  } else if (!verifyToken(token, t.secret, at)) {
     // genuine HMAC but outside the +/-1 window = stale code (screenshot); anything else is forged
     return verifyToken(token, t.secret, Number(token.split('.')[1]) * WINDOW_MS)
       ? { result: 'expired', message: 'Expired code', ticketId: t.id }

@@ -12,6 +12,8 @@ import { reverseAfterSettlement, reverseResale } from './reports.ts'
 import { fraudScore, REVIEW_AT } from './fraud.ts'
 import { addInstallments, plan } from './installments.ts'
 import { UserError } from './platform.ts'
+import { assertDelivery } from './rules.ts'
+import { flagScalpers } from './scalpers.ts'
 
 export type PayInput = {
   holdId: number
@@ -27,6 +29,9 @@ export type PayInput = {
   save: boolean
   billing: { name: string; address: string; city: string; zip: string }
   src?: string // marketing source slug (validated by the caller)
+  delivery?: string // mobile (default) | print | willcall; checked against the event's flags in finalize
+  ip?: string // client IP, for scalper detection
+  cardFp?: string // card fingerprint (HMAC of the number), for scalper detection; never the card itself
 }
 export type PayResult = { orderId: number } | { declined: string } | { threeDs: number } | { paypal: string }
 
@@ -34,7 +39,7 @@ export const validSrc = (s?: string | null): s is string => !!s && /^[a-z0-9][a-
 // add-on kinds that get a scannable pass
 export const PASS_KINDS = ['parking', 'hospitality']
 
-type Meta = Pick<PayInput, 'userId' | 'email' | 'exp' | 'save' | 'billing' | 'src'> & { total?: number; installments?: boolean } // total: full price when the payment is only the first quarter
+type Meta = Pick<PayInput, 'userId' | 'email' | 'exp' | 'save' | 'billing' | 'src' | 'delivery' | 'ip' | 'cardFp'> & { total?: number; installments?: boolean } // total: full price when the payment is only the first quarter
 
 // The session's active, unexpired hold, or undefined. Ownership is the session token, never a user-supplied id alone.
 export function liveHold(holdId: number, sessionToken: string) {
@@ -64,7 +69,9 @@ export function finalize(i: PayInput): PayResult {
     if (q.promoError) throw new HoldError(q.promoError, 409)
     // bundle holds carry one line per game; only this event's own tickets count against this event's limit
     assertTicketLimit(i.userId, hold.event_id, q.lines.filter((l) => l.eventId === hold.event_id).length, i.sessionToken, i.email)
-    const meta: Meta = { userId: i.userId, email: i.email, exp: i.exp, save: i.save, billing: i.billing, ...(validSrc(i.src) ? { src: i.src } : {}) }
+    // resale tickets are always mobile (a fresh barcode on the buyer's phone)
+    const delivery = q.lines[0].listingId ? 'mobile' : assertDelivery(hold.event_id, i.delivery ?? 'mobile')
+    const meta: Meta = { userId: i.userId, email: i.email, exp: i.exp, save: i.save, billing: i.billing, delivery, ...(i.ip ? { ip: i.ip } : {}), ...(i.cardFp ? { cardFp: i.cardFp } : {}), ...(validSrc(i.src) ? { src: i.src } : {}) }
     let amount = q.total
     let method = i.method
     if (i.installments) {
@@ -116,10 +123,10 @@ function createOrder(p: Payment): number {
   const review = fraud.score >= REVIEW_AT
   const order = db
     .prepare(
-      `INSERT INTO orders (user_id, session_token, access_token, email, event_id, hold_id, status, subtotal, fees, tax, protection, discount, promo_id, total, idempotency_key, fraud_score, review_reason, source, src)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+      `INSERT INTO orders (user_id, session_token, access_token, email, event_id, hold_id, status, subtotal, fees, tax, protection, discount, promo_id, total, idempotency_key, fraud_score, review_reason, source, src, delivery, ip, card_fp)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
     )
-    .get(m.userId, p.session_token, accessToken, m.email, hold.event_id, hold.id, review ? 'review' : 'paid', q.subtotal, q.fees, q.tax, q.protection, q.discount, q.promo?.id ?? null, q.total, p.idempotency_key, fraud.score, review ? fraud.reasons.join(' + ') : null, listingId ? 'resale' : null, m.src ?? null) as { id: number }
+    .get(m.userId, p.session_token, accessToken, m.email, hold.event_id, hold.id, review ? 'review' : 'paid', q.subtotal, q.fees, q.tax, q.protection, q.discount, q.promo?.id ?? null, q.total, p.idempotency_key, fraud.score, review ? fraud.reasons.join(' + ') : null, listingId ? 'resale' : null, m.src ?? null, m.delivery ?? 'mobile', m.ip && m.ip !== 'local' ? m.ip : null, m.cardFp ?? null) as { id: number }
   const item = db.prepare("INSERT INTO order_items (order_id, kind, inventory_id, offer_id, unit_cents, fee_cents, tax_cents) VALUES (?, 'ticket', ?,?,?,?,?)")
   const ticket = db.prepare('INSERT INTO tickets (order_id, inventory_id, owner_id, secret) VALUES (?,?,?,?)')
   for (const l of q.lines) {
@@ -141,10 +148,11 @@ function createOrder(p: Payment): number {
   db.prepare('UPDATE payments SET order_id = ? WHERE id = ?').run(order.id, p.id)
   db.prepare("UPDATE holds SET status = 'converted' WHERE id = ?").run(hold.id)
   if (m.save && m.userId) {
-    db.prepare('INSERT OR IGNORE INTO saved_cards (user_id, brand, last4, exp, fake_token) VALUES (?,?,?,?,?)').run(m.userId, p.brand, p.last4, m.exp, 'tok_' + randomBytes(12).toString('hex'))
+    db.prepare('INSERT OR IGNORE INTO saved_cards (user_id, brand, last4, exp, fake_token, fp) VALUES (?,?,?,?,?,?)').run(m.userId, p.brand, p.last4, m.exp, 'tok_' + randomBytes(12).toString('hex'), m.cardFp ?? null)
   }
   const ev = db.prepare('SELECT title, starts_at FROM events WHERE id = ?').get(hold.event_id) as { title: string; starts_at: string }
   if (m.installments) addInstallments(order.id, p, q.total, ev.starts_at)
+  flagScalpers(order.id)
   sendConfirmation(order.id)
   // the confirmation email above already reached the buyer; the inbox / SMS "tickets delivered" alert is recorded once per order
   if (m.userId && review) notify(m.userId, 'order', `Order #${order.id} is under review`, ev.title, `/orders/${order.id}`)

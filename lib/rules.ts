@@ -73,3 +73,21 @@ export function assertTransferOpen(eventId: number, now = Date.now()) {
   const closes = transferCloses(eventId, ev.starts_at)
   if (closes && now >= Date.parse(closes)) throw new HoldError(`Transfers for this event closed ${r.deadline_hours} hours before the show`)
 }
+
+// Organizer: how tickets reach the buyer and whether they can change hands. Printing and will-call are opt-in; mobile is always available.
+export function setDeliveryRules(eventId: number, f: { print_ok: boolean; willcall_ok: boolean; non_transferable: boolean }) {
+  db.prepare('UPDATE events SET print_ok = ?, willcall_ok = ?, non_transferable = ? WHERE id = ?').run(f.print_ok ? 1 : 0, f.willcall_ok ? 1 : 0, f.non_transferable ? 1 : 0, eventId)
+}
+
+export const DELIVERIES = ['mobile', 'print', 'willcall'] as const
+export type Delivery = (typeof DELIVERIES)[number]
+export const DELIVERY_LABEL: Record<Delivery, string> = { mobile: 'Mobile ticket', print: 'Print at home', willcall: 'Will-call (pick up at the box office)' }
+
+// Server-side check of the delivery a buyer chose against what the event offers.
+export function assertDelivery(eventId: number, d: string): Delivery {
+  if (!(DELIVERIES as readonly string[]).includes(d)) throw new HoldError('Choose a delivery method', 400)
+  const e = db.prepare('SELECT print_ok, willcall_ok FROM events WHERE id = ?').get(eventId) as { print_ok: number; willcall_ok: number }
+  if (d === 'print' && !e.print_ok) throw new HoldError('This event is mobile-only: tickets cannot be printed', 409)
+  if (d === 'willcall' && !e.willcall_ok) throw new HoldError('Will-call is not offered for this event', 409)
+  return d as Delivery
+}

@@ -1,9 +1,10 @@
 import Link from 'next/link'
 import Flash from '../../../../../../components/Flash.tsx'
 import OrderTools from '../../../../../../components/OrderTools.tsx'
-import { searchOrders, ORDER_ROLES } from '../../../../../../lib/orderadmin.ts'
+import { searchOrders, willCallOrders, ORDER_ROLES } from '../../../../../../lib/orderadmin.ts'
+import { fmtDateTime } from '../../../../../../lib/format.ts'
 import { loadEvent } from '../../../../guard.ts'
-import { orderComp, orderHold, orderMove, orderRefund, orderRelease, orderResend } from '../../../../actions.ts'
+import { orderComp, orderHold, orderMove, orderPickup, orderRefund, orderRelease, orderResend } from '../../../../actions.ts'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,12 +12,27 @@ export default async function EventOrders({ params, searchParams }: { params: Pr
   const { orgId, id } = await params
   const { e } = await loadEvent(orgId, id, ORDER_ROLES)
   const sp = await searchParams
+  const willcall = willCallOrders(e.id)
   const rows = searchOrders(e.id, (sp.q ?? '').trim(), sp.status ?? '')
   return (
     <>
       <h1>Orders: {e.title}</h1>
       <p><Link href={`/organizer/${orgId}/events/${e.id}`}>Back to event</Link></p>
       <Flash error={sp.error} notice={sp.notice} />
+      {willcall.length > 0 && (
+        <>
+          <h2>Will-call pickup</h2>
+          <p className="muted">Buyers who chose box-office pickup. Check photo ID and the order number, then mark it picked up.</p>
+          {willcall.map((w) => (
+            <div className="card row" key={w.id}>
+              Order #{w.id} · {w.name || w.email} &lt;{w.email}&gt; · {w.tickets} ticket{w.tickets === 1 ? '' : 's'} ·{' '}
+              {w.picked_up_at ? <span className="badge">picked up {fmtDateTime(w.picked_up_at, e.tz)} by {w.picked_by}</span> : w.status === 'review' ? <span className="muted">under review</span> : (
+                <form action={orderPickup}><input type="hidden" name="orderId" value={w.id} /><button>Mark picked up</button></form>
+              )}
+            </div>
+          ))}
+        </>
+      )}
       <form className="filters">
         <input name="q" defaultValue={sp.q ?? ''} placeholder="Order #, email or name" aria-label="Search orders" />
         <select name="status" defaultValue={sp.status ?? ''} aria-label="Status">

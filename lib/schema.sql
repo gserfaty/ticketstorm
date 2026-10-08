@@ -399,6 +399,7 @@ CREATE TABLE IF NOT EXISTS saved_cards (
   exp TEXT NOT NULL,
   fake_token TEXT NOT NULL,
   is_default INTEGER NOT NULL DEFAULT 0, -- express checkout preselects it
+  fp TEXT,                               -- card fingerprint (HMAC of the number) for scalper detection; the number itself is never kept
   UNIQUE(user_id, brand, last4)
 );
 

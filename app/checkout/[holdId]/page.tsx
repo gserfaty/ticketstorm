@@ -8,6 +8,9 @@ import { parseOptions, protectionPct, quote } from '../../../lib/pricing.ts'
 import { plan } from '../../../lib/installments.ts'
 import { money, fmtDateTimeTz } from '../../../lib/format.ts'
 import { getSession, getUser } from '../../../lib/session.ts'
+import { addressOf } from '../../../lib/account.ts'
+import { DELIVERY_LABEL } from '../../../lib/rules.ts'
+import type { Delivery } from '../../../lib/rules.ts'
 import PayForm from '../../../components/PayForm.tsx'
 import { applyOptions, pay } from '../actions.ts'
 
@@ -38,6 +41,12 @@ export default async function Checkout({ params, searchParams }: { params: Promi
   const user = await getUser()
   const face = q.lines.reduce((n, l) => n + (l.eventId === hold.event_id ? l.unit : 0), 0)
   const premium = resale ? 0 : Math.round(((face - q.discount) * protectionPct()) / 100)
+  const flags = db.prepare('SELECT print_ok, willcall_ok FROM events WHERE id = ?').get(hold.event_id) as { print_ok: number; willcall_ok: number }
+  const deliveries = (['mobile', ...(flags.print_ok ? ['print'] : []), ...(flags.willcall_ok ? ['willcall'] : [])] as Delivery[]).filter((d) => !resale || d === 'mobile').map((d) => [d, DELIVERY_LABEL[d]] as [string, string])
+  const cards = user ? listSavedCards(user.id) : []
+  const addr = user ? addressOf((db.prepare('SELECT address FROM users WHERE id = ?').get(user.id) as { address: string | null }).address) : undefined
+  const prefill = user && addr?.line1 && addr.city && addr.zip ? { bname: user.name, baddress: addr.line1, bcity: addr.city, bzip: addr.zip } : undefined
+  const express = !!prefill && !!prefill.bname && cards.length > 0 && !session?.impersonator_id
   const limited = db
     .prepare('SELECT s.name AS section, st.row, st.number FROM inventory i JOIN seats st ON st.id = i.seat_id JOIN sections s ON s.id = i.section_id WHERE i.hold_id = ? AND st.obstructed = 1 ORDER BY i.id')
     .all(hold.id) as { section: string; row: string; number: number }[]
@@ -93,7 +102,7 @@ export default async function Checkout({ params, searchParams }: { params: Promi
       {notice && <p className="notice">{notice}</p>}
       {q.promoError && <p className="error">{q.promoError}. Clear the promo code and update the order to continue.</p>}
       {error && <p className="error">{error}</p>}
-      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={user ? listSavedCards(user.id) : []} canSave={!!user} total={money(q.total)} totalCents={q.total} installments={parts?.map((p) => money(p.amount)) ?? null} captcha={newCaptcha()} />
+      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={cards} canSave={!!user} total={money(q.total)} totalCents={q.total} installments={parts?.map((p) => money(p.amount)) ?? null} captcha={newCaptcha()} deliveries={deliveries} prefill={prefill} express={express} />
       <p><Link href={`/events/${ev.slug}/tickets`}>Back to seat map</Link></p>
     </>
   )

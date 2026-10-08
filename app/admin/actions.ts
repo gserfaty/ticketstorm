@@ -10,6 +10,7 @@ import { audit, setFlag, UserError } from '../../lib/platform.ts'
 import { setCityTax, setFeeDefaults } from '../../lib/pricing.ts'
 import { setResaleDefaults } from '../../lib/rules.ts'
 import { decidePayout } from '../../lib/payouts.ts'
+import { cancelCluster } from '../../lib/scalpers.ts'
 import { addMessage, closeTicket } from '../../lib/support.ts'
 import { requireAdmin, startImpersonation } from '../../lib/session.ts'
 
@@ -271,4 +272,13 @@ export async function impersonateUser(f: FormData) {
     throw e
   }
   redirect('/')
+}
+
+// Bulk-cancel one scalper cluster. Only (event, kind, key) come from the form; the orders are looked up server-side and refunded one by one.
+export async function cancelScalperOrders(f: FormData) {
+  const admin = await requireAdmin()
+  const r = cancelCluster(num(f, 'eventId'), text(f, 'kind'), text(f, 'key'))
+  audit(admin.id, 'scalper.cancel_orders', `event:${num(f, 'eventId')}`, { kind: text(f, 'kind'), key: text(f, 'key').slice(0, 12), cancelled: r.cancelled, failed: r.failed })
+  if (r.failed.length) refuse('/admin/scalpers', `Cancelled ${r.cancelled.length}; ${r.failed.length} failed: ${r.failed.map((x) => `#${x.id} ${x.why}`).join('; ')}`)
+  done('/admin/scalpers', `Cancelled and refunded ${r.cancelled.length} order(s)`)
 }

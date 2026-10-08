@@ -483,6 +483,21 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   db.prepare("UPDATE events SET print_ok = 1, willcall_ok = 1 WHERE slug IN ('neon-harbor-empire-saturday', 'toronto-intl-demo')").run()
   db.prepare("UPDATE events SET non_transferable = 1, willcall_ok = 1 WHERE slug IN ('neon-harbor-catskill-saturday', 'home-stand-1')").run()
 
+
+  // three accounts, one card fingerprint and one IP, all buying on the same show: the scalper check flags them and /admin/scalpers lists the cluster
+  {
+    const target = (db.prepare("SELECT id FROM events WHERE slug = 'storm-rules-demo'").get() as { id: number }).id
+    for (const n of [1, 2, 3]) {
+      const email = `scalper${n}@ticketstorm.test`
+      const uid = Number(db.prepare('INSERT INTO users (email, name, password_hash, email_verified_at) VALUES (?,?,?,?)').run(email, `Scott Scalper ${n}`, hashPassword('password123'), new Date().toISOString()).lastInsertRowid)
+      const owner = { sessionToken: `seed-scalper-${n}-session`, userId: uid }
+      const held = holdBestAvailable(target, owner, 2)
+      finalize({ holdId: held.holdId, sessionToken: owner.sessionToken, userId: uid, email, key: `seed-scalper-order-${n}`, method: 'card', brand: 'Visa', last4: '1881', exp: '12/39', save: false, ip: '203.0.113.9', cardFp: 'seed-scalper-card-fingerprint', billing: { name: `Scott ${n}`, address: '9 Back Alley', city: 'New York', zip: '10001' } })
+    }
+  }
+  // fan@ watches the Saturday show for $40 or less (the cheapest level is $50: lower it as organizer@ and run the jobs)
+  db.prepare("INSERT INTO price_alerts (user_id, event_id, target_cents) SELECT u.id, e.id, 4000 FROM users u, events e WHERE u.email = 'fan@ticketstorm.test' AND e.slug = 'neon-harbor-empire-saturday'").run()
+
   // editorial lists (event slugs picked from the data) and city guides
   const top = (where: string, n: number) => (db.prepare(`SELECT slug FROM events WHERE status = 'published' AND starts_at > ? AND ${where} ORDER BY popularity DESC, starts_at LIMIT ?`).all(new Date().toISOString(), n) as { slug: string }[]).map((r) => r.slug)
   const put = (slug: string, kind: string, title: string, blurb: string, cityName: string | null, items: [string, string][]) =>

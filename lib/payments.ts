@@ -116,5 +116,5 @@ export function chargeStored(cardOrder: number, toOrder: number, amount: number,
 }
 
 export function listSavedCards(userId: number) {
-  return db.prepare('SELECT id, brand, last4, exp FROM saved_cards WHERE user_id = ? ORDER BY id').all(userId).map((r) => ({ ...r })) as { id: number; brand: string; last4: string; exp: string }[]
+  return db.prepare('SELECT id, brand, last4, exp, is_default FROM saved_cards WHERE user_id = ? ORDER BY is_default DESC, id').all(userId).map((r) => ({ ...r })) as { id: number; brand: string; last4: string; exp: string; is_default: number }[]
 }

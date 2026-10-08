@@ -6,13 +6,13 @@ import * as access from '../../lib/access.ts'
 import { parseLocal } from '../../lib/format.ts'
 import { holdOrder, approveReview } from '../../lib/fraud.ts'
 import { refundEvent, sendConfirmation } from '../../lib/orders.ts'
-import { compTickets, moveSeat, ORDER_ROLES, refundFromForm } from '../../lib/orderadmin.ts'
+import { compTickets, markPickedUp, moveSeat, ORDER_ROLES, refundFromForm } from '../../lib/orderadmin.ts'
 import * as org from '../../lib/organizer.ts'
 import { audit, UserError } from '../../lib/platform.ts'
 import { sendCampaign } from '../../lib/campaign.ts'
 import { requestPayout } from '../../lib/payouts.ts'
 import { settleEvent } from '../../lib/reports.ts'
-import { setResaleRule, setTransferRule } from '../../lib/rules.ts'
+import { setDeliveryRules, setResaleRule, setTransferRule } from '../../lib/rules.ts'
 import { requireOrgRole, requireUser } from '../../lib/session.ts'
 
 const text = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
@@ -150,6 +150,12 @@ export async function saveLimits(f: FormData) {
 export async function saveTransferRuleAction(f: FormData) {
   const e = await authEvent(f)
   run(e.back, () => { setTransferRule(e.id, f.get('enabled') === 'on', text(f, 'hours')); audit(e.user.id, 'rules.transfer', `event:${e.id}`, { enabled: f.get('enabled') === 'on', hours: text(f, 'hours') }) })
+}
+
+export async function saveDeliveryRulesAction(f: FormData) {
+  const e = await authEvent(f)
+  const on = (k: string) => f.get(k) === 'on'
+  run(e.back, () => { setDeliveryRules(e.id, { print_ok: on('print_ok'), willcall_ok: on('willcall_ok'), non_transferable: on('non_transferable') }); audit(e.user.id, 'rules.delivery', `event:${e.id}`, { print: on('print_ok'), willcall: on('willcall_ok'), nonTransferable: on('non_transferable') }) })
 }
 
 export async function saveResaleRuleAction(f: FormData) {
@@ -384,4 +390,10 @@ export async function orderComp(f: FormData) {
     const id = compTickets(e.id, text(f, 'email'), seats, text(f, 'note'))
     audit(e.user.id, 'order.comp', `order:${id}`, { event: e.id, email: text(f, 'email'), seats: seats.length })
   }, 'Complimentary tickets sent')
+}
+
+// Will-call: box office (or manager/owner) of the order's own org marks the pickup.
+export async function orderPickup(f: FormData) {
+  const o = await authOrder(f)
+  run(o.back, () => { markPickedUp(o.id, o.user.id); audit(o.user.id, 'order.pickup', `order:${o.id}`) }, 'Marked as picked up')
 }

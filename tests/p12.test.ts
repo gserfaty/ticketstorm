@@ -107,3 +107,127 @@ test('SSE frames are the compact availability only: no hold ids, sessions or own
   for (let i = 0; i < MAX_STREAMS; i++) release()
   assert.equal(streamCount(), 0)
 })
+
+// ---- rules, flags, alerts ----
+const { finalize } = await import('../lib/orders.ts')
+const { createTransfer, acceptTransfer } = await import('../lib/transfers.ts')
+const { createListing } = await import('../lib/resale.ts')
+const { setPriceAlert, getPriceAlert, priceTargetAlerts } = await import('../lib/pricealerts.ts')
+const { runAlerts } = await import('../lib/alerts.ts')
+const { setDeliveryRules, assertDelivery } = await import('../lib/rules.ts')
+const { clusters, cancelCluster, SCALPER_ACCOUNTS } = await import('../lib/scalpers.ts')
+const { markPickedUp, willCallOrders } = await import('../lib/orderadmin.ts')
+const { scanTicket } = await import('../lib/scan.ts')
+const { makeToken, makePrintToken } = await import('../lib/safetix.ts')
+const user = (name: string) => run('INSERT INTO users (email, name) VALUES (?,?)', `${name}@x.test`, name)
+const get = <T>(sql: string, ...a: (string | number)[]) => db.prepare(sql).get(...a) as T
+let n = 0
+function buy(userId: number | null, event: number, o: { qty?: number; delivery?: string; ip?: string; cardFp?: string; email?: string } = {}) {
+  const session = `s${++n}`
+  const h = inv.holdBestAvailable(event, { sessionToken: session, userId }, o.qty ?? 1)
+  const r = finalize({ holdId: h.holdId, sessionToken: session, userId, email: o.email ?? `u${userId}@x.test`, key: `key-${n}-padding`, method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false,
+    billing: { name: 'A', address: 'x', city: 'X', zip: '1' }, delivery: o.delivery, ip: o.ip, cardFp: o.cardFp })
+  assert.ok('orderId' in r)
+  return { orderId: r.orderId, tickets: (db.prepare('SELECT id FROM tickets WHERE order_id = ? ORDER BY id').all(r.orderId) as { id: number }[]).map((t) => t.id) }
+}
+const holdErr = (fn: () => unknown, re: RegExp) => assert.throws(fn, (e: Error) => e instanceof inv.HoldError && re.test(e.message))
+
+test('non-transferable tickets can be neither sent nor resold, and accept re-checks', () => {
+  const ev = mkEvent('nt')
+  const [a, b] = [user('nt-a'), user('nt-b')]
+  const [t1, t2] = buy(a, ev, { qty: 2 }).tickets
+  const pending = createTransfer(a, t2, 'friend@x.test') // allowed while the flag is off
+  setDeliveryRules(ev, { print_ok: false, willcall_ok: false, non_transferable: true })
+  holdErr(() => createTransfer(a, t1, 'friend@x.test'), /non-transferable/)
+  holdErr(() => createListing(a, t1, 5000), /non-transferable/)
+  const tok = get<{ claim_token: string }>('SELECT claim_token FROM transfers WHERE id = ?', pending).claim_token
+  holdErr(() => acceptTransfer(b, pending, tok), /non-transferable/)
+  assert.equal(get<{ owner_id: number }>('SELECT owner_id FROM tickets WHERE id = ?', t2).owner_id, a)
+  setDeliveryRules(ev, { print_ok: false, willcall_ok: false, non_transferable: false })
+  assert.ok(createListing(a, t1, 5000) > 0)
+})
+
+test('price alert notifies exactly once at or below the target; a new target re-arms it', () => {
+  const ev = mkEvent('alerting')
+  const u = user('pa')
+  assert.throws(() => setPriceAlert(u, ev, 'abc'), /target price/)
+  setPriceAlert(u, ev, '40') // cheapest level is $50
+  const count = () => get<{ n: number }>("SELECT count(*) AS n FROM notifications WHERE user_id = ? AND kind = 'price_target'", u).n
+  runAlerts(); runAlerts()
+  assert.equal(count(), 0)
+  db.prepare('UPDATE price_levels SET price_cents = 3500 WHERE event_id = ? AND name = ?').run(ev, 'General')
+  runAlerts(); runAlerts(); runAlerts()
+  assert.equal(count(), 1)
+  assert.equal(priceTargetAlerts(), 0) // calling the job again directly sends nothing either
+  assert.equal(getPriceAlert(u, ev)?.notified, true)
+  setPriceAlert(u, ev, '36') // a different target is a new alert
+  runAlerts(); runAlerts()
+  assert.equal(count(), 2)
+})
+
+test('delivery choices are checked against the event; print codes work only where printing is allowed and only once', () => {
+  const ev = mkEvent('delivery')
+  const u = user('dl')
+  holdErr(() => assertDelivery(ev, 'print'), /mobile-only/)
+  holdErr(() => assertDelivery(ev, 'willcall'), /Will-call/)
+  holdErr(() => assertDelivery(ev, 'pigeon'), /Choose a delivery/)
+  const scanner = user('dl-scan')
+  const { tickets: [t] } = buy(u, ev)
+  const secret = get<{ secret: string }>('SELECT secret FROM tickets WHERE id = ?', t).secret
+  assert.equal(scanTicket(ev, makePrintToken(t, secret), scanner).result, 'invalid') // mobile-only event: a printed code is refused
+  setDeliveryRules(ev, { print_ok: true, willcall_ok: true, non_transferable: false })
+  assert.equal(assertDelivery(ev, 'print'), 'print')
+  assert.equal(scanTicket(ev, makePrintToken(t, 'wrong-secret'), scanner).result, 'invalid')
+  assert.equal(scanTicket(ev, makePrintToken(t, secret), scanner).result, 'valid')
+  assert.equal(scanTicket(ev, makePrintToken(t, secret), scanner).result, 'used')
+  assert.equal(scanTicket(ev, makeToken(t, secret), scanner).result, 'used') // the mobile code of a used ticket is dead as well
+  // the order remembers its delivery
+  const w = buy(u, ev, { delivery: 'willcall' })
+  assert.equal(get<{ delivery: string }>('SELECT delivery FROM orders WHERE id = ?', w.orderId).delivery, 'willcall')
+})
+
+test('will-call pickup is marked once, by staff, and only for will-call orders', () => {
+  const ev = mkEvent('willcall')
+  setDeliveryRules(ev, { print_ok: false, willcall_ok: true, non_transferable: false })
+  const [u, staff] = [user('wc'), user('wc-staff')]
+  const mobile = buy(u, ev)
+  const wc = buy(u, ev, { delivery: 'willcall' })
+  assert.deepEqual(willCallOrders(ev).map((o) => o.id), [wc.orderId])
+  assert.throws(() => markPickedUp(mobile.orderId, staff), /not a will-call/i)
+  markPickedUp(wc.orderId, staff)
+  assert.throws(() => markPickedUp(wc.orderId, staff), /not a will-call/i)
+  assert.equal(willCallOrders(ev)[0].picked_up_at !== null, true)
+})
+
+test('scalper clusters: 3 accounts on one card or IP flag the accounts; bulk cancel refunds through the shared refund function', () => {
+  const ev = mkEvent('scalp')
+  const us = [user('sc1'), user('sc2'), user('sc3'), user('sc-ok')]
+  const flagged = (id: number) => get<{ flagged: number }>('SELECT flagged FROM users WHERE id = ?', id).flagged
+  buy(us[0], ev, { cardFp: 'fp-1', ip: '198.51.100.7' })
+  buy(us[1], ev, { cardFp: 'fp-1', ip: 'local' })
+  assert.equal(SCALPER_ACCOUNTS, 3)
+  assert.deepEqual(clusters(ev), [])
+  assert.deepEqual(us.map(flagged), [0, 0, 0, 0])
+  const third = buy(us[2], ev, { cardFp: 'fp-1', ip: 'local' })
+  assert.equal(clusters(ev).length, 1)
+  assert.equal(clusters(ev)[0].kind, 'card')
+  assert.deepEqual(us.map(flagged), [1, 1, 1, 0])
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM audit_log WHERE action = 'scalper.flag' AND actor_id IS NULL").n, 1)
+  buy(us[3], ev, { cardFp: 'fp-other', ip: 'local' }) // an unrelated buyer is not caught
+  assert.equal(flagged(us[3]), 0)
+  // unknown IPs never cluster: three accounts on 'local' stay unflagged
+  const ev2 = mkEvent('scalp-local')
+  for (const u of us.slice(0, 3)) buy(u, ev2, { ip: 'local' })
+  assert.deepEqual(clusters(ev2), [])
+  // bulk cancel
+  const held = (e: number) => get<{ n: number }>("SELECT count(*) AS n FROM inventory WHERE event_id = ? AND status = 'sold'", e).n
+  assert.equal(held(ev), 4)
+  const r = cancelCluster(ev, 'card', 'fp-1')
+  assert.equal(r.cancelled.length, 3)
+  assert.equal(r.failed.length, 0)
+  assert.equal(held(ev), 1) // the three seats are back on sale; the unrelated buyer keeps theirs
+  assert.equal(get<{ status: string }>('SELECT status FROM orders WHERE id = ?', third.orderId).status, 'refunded')
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM payments WHERE kind = 'refund' AND status = 'succeeded' AND order_id = ?", third.orderId).n, 1)
+  assert.equal(cancelCluster(ev, 'card', 'fp-1').cancelled.length, 0) // nothing left, idempotent
+  assert.throws(() => cancelCluster(ev, 'bogus', 'x'))
+})

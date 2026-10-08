@@ -6,7 +6,7 @@ import { fmtDateTimeTz, toLocalInput } from '../../../../../lib/format.ts'
 import { attendance } from '../../../../../lib/scan.ts'
 import { loadEvent } from '../../../guard.ts'
 import { resaleRule, transferRule } from '../../../../../lib/rules.ts'
-import { cancelEvent, changeDate, publish, saveEvent, saveInfo, saveResaleRuleAction, saveTransferRuleAction } from '../../../actions.ts'
+import { cancelEvent, changeDate, publish, saveDeliveryRulesAction, saveEvent, saveInfo, saveResaleRuleAction, saveTransferRuleAction } from '../../../actions.ts'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,6 +22,7 @@ export default async function ManageEvent({ params, searchParams }: { params: Pr
     .prepare("SELECT count(*) AS orders, coalesce(sum(total), 0) AS gross, coalesce(sum(refund_error IS NOT NULL), 0) AS failed FROM orders WHERE event_id = ? AND status IN ('paid','review','refunded','cancelled')")
     .get(e.id) as { orders: number; gross: number; failed: number }
   const att = attendance(e.id)
+  const ev = db.prepare('SELECT print_ok, willcall_ok, non_transferable FROM events WHERE id = ?').get(e.id) as { print_ok: number; willcall_ok: number; non_transferable: number }
   const tr = transferRule(e.id)
   const rr = resaleRule(e.id)
   const hidden = <input type="hidden" name="eventId" value={e.id} />
@@ -58,6 +59,15 @@ export default async function ManageEvent({ params, searchParams }: { params: Pr
         <textarea name="notices" defaultValue={info.notices ?? ''} rows={2} maxLength={500} placeholder="Notice banner (parking, gate changes...)" />
         <textarea name="setTimes" defaultValue={(info.set_times ?? []).map((t) => `${t.time} ${t.act}`).join('\n')} rows={3} placeholder={'One per line, venue time: 20:30 Headliner'} />
         <button>Save details</button>
+      </form>
+
+      <h2>Delivery and ticket restrictions</h2>
+      <form action={saveDeliveryRulesAction} className="stack">
+        {hidden}
+        <label><input type="checkbox" name="print_ok" defaultChecked={!!ev.print_ok} /> Allow print-at-home (otherwise mobile tickets only)</label>
+        <label><input type="checkbox" name="willcall_ok" defaultChecked={!!ev.willcall_ok} /> Offer will-call (box-office pickup)</label>
+        <label><input type="checkbox" name="non_transferable" defaultChecked={!!ev.non_transferable} /> Non-transferable: tickets cannot be sent or resold</label>
+        <button>Save delivery rules</button>
       </form>
 
       <h2>Transfer and resale rules</h2>

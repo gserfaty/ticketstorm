@@ -1,4 +1,4 @@
 'use client'
-export default function PrintButton() {
-  return <button className="noprint" onClick={() => window.print()}>Download PDF</button>
+export default function PrintButton({ label = 'Download PDF' }: { label?: string }) {
+  return <button className="noprint" onClick={() => window.print()}>{label}</button>
 }

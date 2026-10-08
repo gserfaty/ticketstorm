@@ -12,11 +12,12 @@ import { admittedNow } from './queue.ts'
 export function assertTradable(ticketId: number, userId: number) {
   const t = db
     .prepare(
-      `SELECT t.status, t.owner_id, i.event_id, e.status AS estatus, e.starts_at, o.status AS ostatus FROM tickets t JOIN inventory i ON i.id = t.inventory_id
+      `SELECT t.status, t.owner_id, i.event_id, e.status AS estatus, e.starts_at, e.non_transferable, o.status AS ostatus FROM tickets t JOIN inventory i ON i.id = t.inventory_id
        JOIN orders o ON o.id = t.order_id JOIN events e ON e.id = i.event_id WHERE t.id = ?`,
     )
-    .get(ticketId) as { status: string; owner_id: number | null; event_id: number; estatus: string; starts_at: string; ostatus: string } | undefined
+    .get(ticketId) as { status: string; owner_id: number | null; event_id: number; estatus: string; starts_at: string; non_transferable: number; ostatus: string } | undefined
   if (!t || t.owner_id !== userId) throw new HoldError('Ticket not found', 404)
+  if (t.non_transferable) throw new HoldError('Tickets for this event are non-transferable: they cannot be sent to someone else or resold')
   if (t.ostatus === 'review') throw new HoldError('This order is under review; its tickets cannot be sent or sold yet')
   if (t.status !== 'valid') throw new HoldError(`A ${t.status} ticket cannot be sent or sold`)
   if (t.estatus === 'cancelled' || Date.parse(t.starts_at) <= Date.now()) throw new HoldError('This event is over or cancelled')

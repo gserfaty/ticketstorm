@@ -6,6 +6,8 @@ import { db } from '../../../lib/db.ts'
 import { eventInfo, eventState, getEvent, orderLimit, otherDates } from '../../../lib/events.ts'
 import { isSoldOut } from '../../../lib/inventory.ts'
 import { displayLevels } from '../../../lib/pricing.ts'
+import { getPriceAlert } from '../../../lib/pricealerts.ts'
+import { priceAlert } from '../../alerts/actions.ts'
 import { allInOn, getSession, getUser } from '../../../lib/session.ts'
 import { registerVerifiedFan, unlockPresale } from '../../access/actions.ts'
 import Heart from '../../../components/Heart.tsx'
@@ -43,6 +45,7 @@ export default async function EventPage({ params, searchParams }: { params: Prom
   const max = orderLimit(e!)
   const info = eventInfo(e!.info)
   const others = otherDates(e!)
+  const alert = user ? getPriceAlert(user.id, e!.id) : undefined
   const related = relatedEvents(e!)
   const viewers = viewingNow(e!.id)
   const wx = weather(localDate(e!.starts_at, e!.tz), e!.city, e!.vlat)
@@ -74,6 +77,22 @@ export default async function EventPage({ params, searchParams }: { params: Prom
           <p className="muted">{allIn ? 'Prices include fees and tax (plus a per-order fee at checkout).' : 'Prices before fees and tax.'} Limit {max} per order, {e!.ticket_limit} per account.</p>
           <ul>{levels.map((l) => <li key={l.id}>{l.name} ({l.ticket_type}) · {money(l.cents)}{l.perks && <div className="muted">Includes: {l.perks}</div>}</li>)}</ul>
         </>
+      )}
+      <p className="row">
+        <span className="badge">{e!.print_ok ? 'Mobile or print-at-home tickets' : 'Mobile tickets only'}</span>
+        {!!e!.willcall_ok && <span className="badge">Will-call pickup available</span>}
+        {!!e!.non_transferable && <span className="badge" title="Tickets cannot be sent to someone else or resold">Non-transferable</span>}
+      </p>
+      {s.canBuy && levels.length > 0 && (
+        user ? (
+          <form action={priceAlert} className="row">
+            <input type="hidden" name="eventId" value={e!.id} />
+            <label>Alert me when tickets are $ <input name="target" inputMode="decimal" size={6} pattern="\d{1,5}(\.\d{1,2})?" required defaultValue={alert ? (alert.target_cents / 100).toFixed(2) : ''} aria-label="Target price in dollars" /> or less</label>
+            <button>{alert ? 'Update alert' : 'Set price alert'}</button>
+            {alert && <button name="clear" value="1" formNoValidate>Remove</button>}
+            {alert && <span className="muted">{alert.notified ? 'We told you when this price was reached.' : `Watching for ${money(alert.target_cents)} (face price, before fees).`}</span>}
+          </form>
+        ) : <p className="muted"><Link href={`/login?next=${encodeURIComponent(`/events/${e!.slug}`)}`}>Log in</Link> to set a price alert.</p>
       )}
       {offers.length > 0 && <p className="muted">Discounted tickets at checkout: {offers.map((o) => `${o.name} ${o.pct_off}% off`).join(', ')}.</p>}
       {addons.length > 0 && <p className="muted">Add-ons at checkout: {addons.map((a) => `${a.name} ${money(a.price_cents)}${a.left ? '' : ' (sold out)'}`).join(', ')}.</p>}

@@ -3,7 +3,7 @@
 import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { db } from '../../lib/db.ts'
-import { allowed, checkCaptcha, clientIp, isBlocked, newCaptcha } from '../../lib/defense.ts'
+import { allowed, checkCaptcha, clientIp, isBlocked, mac, newCaptcha } from '../../lib/defense.ts'
 import type { Captcha } from '../../lib/defense.ts'
 import { HoldError } from '../../lib/inventory.ts'
 import { UserError } from '../../lib/platform.ts'
@@ -52,6 +52,7 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
   let brand = ''
   let last4 = ''
   let exp = ''
+  let cardFp: string | undefined
   const savedId = field(f, 'saved')
   if (chosen === 'applepay' || chosen === 'googlepay') {
     // simulated wallet: no token reaches the server; it is charged as the test Visa 4242
@@ -61,10 +62,13 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
     method = 'paypal'
     brand = 'PayPal'
   } else if (savedId) {
-    const c = user && (db.prepare('SELECT brand, last4, exp FROM saved_cards WHERE id = ? AND user_id = ?').get(Number(savedId), user.id) as { brand: string; last4: string; exp: string } | undefined)
+    const c = user && (db.prepare('SELECT brand, last4, exp, fp FROM saved_cards WHERE id = ? AND user_id = ?').get(Number(savedId), user.id) as { brand: string; last4: string; exp: string; fp: string | null } | undefined)
     if (!c) return bad('Saved card not found')
+    // a saved card is not charged on the strength of the session alone: the CVC is typed again every time (express checkout included)
+    if (!/^\d{3,4}$/.test(field(f, 'cvc'))) return bad('Enter the CVC of your saved card to confirm the payment')
     method = 'saved'
     ;({ brand, last4, exp } = c!)
+    cardFp = c!.fp ?? undefined
   } else {
     // number and cvc live only in this function's locals; only brand + last4 + exp go further
     const card = { number: field(f, 'number').replace(/[\s-]/g, ''), exp: field(f, 'exp'), cvc: field(f, 'cvc') }
@@ -73,11 +77,12 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
     ;({ exp } = card)
     brand = brandOf(card.number)
     last4 = card.number.slice(-4)
+    cardFp = mac(`card:${card.number}`).toString('hex').slice(0, 32) // keyed hash for scalper detection; the number itself goes no further
   }
 
   let r
   try {
-    r = finalize({ holdId, sessionToken: session.token, userId: user?.id ?? null, email, key, method, installments: f.get('installments') === 'on', brand, last4, exp, save: !!user && f.get('save') === 'on' && method === 'card', billing, src: (await cookies()).get('src')?.value })
+    r = finalize({ holdId, sessionToken: session.token, userId: user?.id ?? null, email, key, method, installments: f.get('installments') === 'on', brand, last4, exp, save: !!user && f.get('save') === 'on' && method === 'card', billing, src: (await cookies()).get('src')?.value, delivery: field(f, 'delivery') || 'mobile', ip, cardFp })
   } catch (e) {
     if (e instanceof HoldError) return e.status === 410 ? back(holdId, e.message) : bad(e.message)
     throw e

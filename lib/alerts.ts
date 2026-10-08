@@ -6,6 +6,7 @@ import { mac } from './defense.ts'
 import { fmtDateTime, money } from './format.ts'
 import { haversineKm, miToKm } from './geo.ts'
 import { APP_URL, notify, sendEmail, sendSms } from './notify.ts'
+import { priceTargetAlerts } from './pricealerts.ts'
 
 // ---- unsubscribe tokens: `userId.category.HMAC(userId:category)`, no expiry, one category per token ----
 const sign = (userId: number, category: string) => mac(`unsub:${userId}:${category}`).toString('hex')
@@ -137,5 +138,6 @@ export function runAlerts(now = Date.now()) {
     newEvents()
     onsaleSoon(now)
     priceDrops()
+    priceTargetAlerts()
   })
 }
