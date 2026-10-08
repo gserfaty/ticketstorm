@@ -152,3 +152,21 @@ test('declined transfer leaves the ticket with the sender', () => {
   assert.equal(status(t), 'valid')
   assert.equal(scan(t), 'valid')
 })
+
+test('cancel after resale: seller credit reversed once, both orders refunded', async () => {
+  const { refundEvent } = await import('../lib/orders.ts')
+  const [t] = buy(alice)
+  const listingId = createListing(alice, t, 6000)
+  const session = 'bob-cancel'
+  const h = holdListing(listingId, { sessionToken: session, userId: bob })
+  const r = finalize({ holdId: h.holdId, sessionToken: session, userId: bob, email: 'bob@x.test', key: 'cancel-key-padding', method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false, billing: { name: 'B', address: 'a', city: 'c', zip: '1' } })
+  assert.ok('orderId' in r)
+  const net = () => get<{ s: number }>("SELECT coalesce(sum(amount), 0) AS s FROM ledger WHERE ref LIKE ?", `listing:${listingId}%`).s
+  assert.equal(net(), 6000)
+  refundEvent(ev)
+  assert.equal(net(), 0)
+  refundEvent(ev) // idempotent
+  assert.equal(net(), 0)
+  const orders = [get<{ order_id: number }>('SELECT order_id FROM tickets WHERE id = ?', t).order_id, r.orderId]
+  for (const o of orders) assert.equal(get<{ status: string }>('SELECT status FROM orders WHERE id = ?', o).status, 'refunded')
+})

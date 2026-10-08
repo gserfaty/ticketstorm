@@ -16,7 +16,7 @@ export default async function Order({ params, searchParams }: { params: Promise<
     .prepare(
       `SELECT oi.unit_cents, oi.fee_cents, oi.tax_cents, tk.id AS ticket_id, tk.status, s.name AS section, st.row, st.number
        FROM order_items oi JOIN inventory i ON i.id = oi.inventory_id JOIN sections s ON s.id = i.section_id LEFT JOIN seats st ON st.id = i.seat_id
-       JOIN tickets tk ON tk.order_id = oi.order_id AND tk.inventory_id = oi.inventory_id WHERE oi.order_id = ? ORDER BY oi.id`,
+       JOIN tickets tk ON tk.id = (SELECT min(id) FROM tickets WHERE order_id = oi.order_id AND inventory_id = oi.inventory_id) WHERE oi.order_id = ? ORDER BY oi.id`,
     )
     .all(id) as { unit_cents: number; fee_cents: number; tax_cents: number; ticket_id: number; status: string; section: string; row: string | null; number: number | null }[]
   const orderFee = (db.prepare("SELECT coalesce(sum(fee_cents), 0) AS f FROM order_items WHERE order_id = ? AND kind = 'fee'").get(id) as { f: number }).f

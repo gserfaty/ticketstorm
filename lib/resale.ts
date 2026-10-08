@@ -47,6 +47,7 @@ export function cancelListing(userId: number, listingId: number) {
   })
 }
 
+// ponytail: ticket_limit is not applied to resale buys; P8 enforces it across orders.
 // Reserve one listing for this session: ONE conditional UPDATE (active, unexpired, not held by a live hold), so two buyers can't both hold it.
 // Checkout/finalize then treat the hold like any other (lines come from pricing.quote). Expiry is lazy via held_until.
 export function holdListing(listingId: number, owner: Owner): { holdId: number; expiresAt: string } {
@@ -100,5 +101,5 @@ export function activeListings(eventId: number, viewerId: number | null): Listin
          LEFT JOIN seats st ON st.id = i.seat_id WHERE i.event_id = ? AND l.status = 'active' AND t.status = 'listed' AND l.expires_at > ? ORDER BY l.price_cents, l.id`,
       )
       .all(viewerId ?? 0, now, eventId, now) as Listing[]
-  ).map((l) => ({ ...l }))
+  )
 }

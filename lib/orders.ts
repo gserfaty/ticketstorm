@@ -4,6 +4,7 @@ import { HoldError } from './inventory.ts'
 import { recordCharge, refund } from './payments.ts'
 import type { Payment } from './payments.ts'
 import { quote } from './pricing.ts'
+import { ledgerAdd } from './ledger.ts'
 import { settleListing } from './resale.ts'
 import { APP_URL, notify, sendEmail } from './notify.ts'
 import { money } from './format.ts'
@@ -172,6 +173,10 @@ export function refundEvent(eventId: number): { refunded: number; failed: number
     const mine = "ticket_id IN (SELECT t.id FROM tickets t JOIN inventory i ON i.id = t.inventory_id WHERE i.event_id = ?)"
     db.prepare(`UPDATE listings SET status = 'cancelled', hold_id = NULL, held_until = NULL WHERE status = 'active' AND ${mine}`).run(eventId)
     db.prepare(`UPDATE transfers SET status = 'cancelled' WHERE status = 'pending' AND ${mine}`).run(eventId)
+    // a resold ticket is refunded to both its original and its new order, so take the seller's credit back (once per listing)
+    for (const l of db.prepare(`SELECT id, seller_id, price_cents FROM listings WHERE status = 'sold' AND ${mine}`).all(eventId) as { id: number; seller_id: number; price_cents: number }[]) {
+      if (!db.prepare('SELECT 1 FROM ledger WHERE ref = ?').get(`listing:${l.id}:reversal`)) ledgerAdd(`user:${l.seller_id}`, 'resale_credit', -l.price_cents, `listing:${l.id}:reversal`)
+    }
   })
   const orders = db
     .prepare("SELECT id FROM orders WHERE event_id = ? AND (status IN ('paid','review') OR (status = 'cancelled' AND refund_error IS NOT NULL)) ORDER BY id")
@@ -197,6 +202,10 @@ export function refundEvent(eventId: number): { refunded: number; failed: number
           ok ? `${ev.title} was cancelled. Your order #${id} was refunded in full (${money(amount)}).\n${link}` : `${ev.title} was cancelled. Your refund of ${money(amount)} for order #${id} could not be completed yet; we will retry and email you.\n${link}`,
         )
         if (o.user_id) notify(o.user_id, 'order', `${ev.title} was cancelled`, ok ? 'Your order was refunded.' : 'Your refund is pending.', `/orders/${id}`)
+        // people the tickets were transferred or sold on to (not the buyer, who is notified above)
+        for (const h of db.prepare('SELECT DISTINCT owner_id FROM tickets WHERE order_id = ? AND owner_id IS NOT NULL AND owner_id IS NOT ?').all(id, o.user_id) as { owner_id: number }[]) {
+          notify(h.owner_id, 'order', `${ev.title} was cancelled`, 'Your ticket was cancelled.', '/tickets')
+        }
       }
       return ok
     })

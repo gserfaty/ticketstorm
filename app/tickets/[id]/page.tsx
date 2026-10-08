@@ -63,7 +63,7 @@ export default async function Ticket({ params, searchParams }: { params: Promise
           </form>
         </div>
       )}
-      <p><Link href={`/orders/${t!.order_id}${tok ? `?t=${encodeURIComponent(tok)}` : ''}`}>Order #{t!.order_id}</Link></p>
+      {(t!.owner_id === t!.user_id || t!.owner_id === null) && <p><Link href={`/orders/${t!.order_id}${tok ? `?t=${encodeURIComponent(tok)}` : ''}`}>Order #{t!.order_id}</Link></p>}
     </>
   )
 }

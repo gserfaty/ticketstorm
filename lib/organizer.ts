@@ -109,6 +109,13 @@ export function changeDate(eventId: number, kind: 'postponed' | 'rescheduled', n
       sendEmail(h.email, `${ev.title} has been ${kind}`, `${ev.title} has been ${kind} (${when}). Your tickets remain valid.\n${APP_URL}/orders/${h.id}${h.user_id ? '' : `?t=${h.access_token}`}`)
       if (h.user_id) notify(h.user_id, 'order', `${ev.title} has been ${kind}`, 'Your tickets remain valid.', `/orders/${h.id}`)
     }
+    // current holders who are not the buyer (transfers, resale)
+    const buyers = new Set(holders.map((h) => h.user_id))
+    for (const { owner_id } of db
+      .prepare("SELECT DISTINCT t.owner_id FROM tickets t JOIN inventory i ON i.id = t.inventory_id WHERE i.event_id = ? AND t.status IN ('valid','listed') AND t.owner_id IS NOT NULL")
+      .all(eventId) as { owner_id: number }[]) {
+      if (!buyers.has(owner_id)) notify(owner_id, 'order', `${ev.title} has been ${kind}`, 'Your tickets remain valid.', '/tickets')
+    }
   })
 }
 
