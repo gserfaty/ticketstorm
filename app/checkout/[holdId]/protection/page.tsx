@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { db } from '../../../../lib/db.ts'
 import { money } from '../../../../lib/format.ts'
@@ -33,7 +32,7 @@ export default async function ProtectionStep({ params }: { params: Promise<{ hol
           <button name="choice" value="no">No thanks</button>
         </form>
       </div>
-      <p><Link href={`/checkout/${holdId}`}>Skip to checkout</Link></p>
+      
     </>
   )
 }

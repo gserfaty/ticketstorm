@@ -64,7 +64,7 @@ export default async function Ticket({ params, searchParams }: { params: Promise
           </form>
         </div>
       )}
-      {open && t!.status === 'valid' && !pending && flags?.non_transferable && <p className="card">The organizer made these tickets <strong>non-transferable</strong>: they cannot be sent to someone else or resold.</p>}
+      {open && t!.status === 'valid' && !pending && !!flags?.non_transferable && <p className="card">The organizer made these tickets <strong>non-transferable</strong>: they cannot be sent to someone else or resold.</p>}
       {open && t!.status === 'valid' && !pending && !flags?.non_transferable && (
         <div className="card">
           {transferOpen ? (

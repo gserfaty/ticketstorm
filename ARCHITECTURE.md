@@ -1,6 +1,6 @@
 # TicketStorm architecture
 
-Status: P1 to P11 of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
+Status: P1 to P11 and P12A (features 1 to 11) of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
 
 ## Stack and why
 
@@ -19,7 +19,7 @@ Conventions: money is integer cents; times are UTC ISO strings and venues carry 
 
 ```
 app/            routes (server components), server actions (actions.ts files), route handlers (route.ts)
-  api/          events/[id]/inventory, events/[id]/ics, holds, holds/[id], queue/[eventId], scan, suggest
+  api/          events/[id]/inventory, events/[id]/stream (SSE), events/[id]/ics, holds, holds/[id], queue/[eventId], scan, suggest
   organizer/    org-scoped tools; guard.ts loads an event and checks the viewer against ITS org
   admin/ (users, orgs, events, orders, review, claims, refunds, flags, fees, taxes) scan/ checkout/ (3ds/, paypal/) orders/ (+ receipt) tickets/ (+ exchange) transfers/ sell/ listings/ favorites/ queue/ access/
   venues/[slug] artists/[slug] inbox/ unsubscribe/ support/ada/
@@ -262,6 +262,29 @@ A parking or hospitality unit is an `order_items` row of kind `addon` plus a `ti
 ### Scanner
 
 `scanTicket` verifies the token for the right event, then admits with `UPDATE tickets SET status='used' ... WHERE id=? AND status='valid'`. Exactly one concurrent scan sees `changes === 1` (tested with 8 connections). Offline replays pass the original scan time, accepted only inside doors-6h to start+12h, otherwise server time is used (see limitations).
+
+## P12A subsystems
+
+### Live availability (SSE)
+`GET /api/events/[id]/stream` (`lib/stream.ts`) sends `JSON.stringify(getAvailability(eventId, openWindowIds))` every 3 s only when it changed (else a `: heartbeat` comment). Frames contain seat ids, a status letter and level ids plus GA counts: no hold ids, sessions or holders. A process-wide counter caps open streams at 100 (503 beyond); a stream closes on `req.signal` abort and after 5 minutes (timers cleared, counter released). `SeatMap` opens an `EventSource`, and polls `/inventory` every 5 s whenever the stream errors or is unavailable.
+
+### Service worker and cache rules
+`public/sw.js` is network first. It answers only navigations to `/tickets` and `/tickets/<digits>` (from a saved copy, only when the fetch fails) and `/_next/static/*` GETs. `OfflineTickets` (rendered for a logged-in owner on those pages) writes the pages into `ts-tickets-u<userId>` and deletes every other `ts-tickets-*` cache first. Any POST to `/logout`, `/login`, `/signup` or `/auth/*` clears all `ts-*` caches, so the next person on the device never sees the previous person's tickets. Guest (`?t=`) ticket pages are never saved. Because `TicketQR` derives the code with `crypto.subtle` from the secret in the saved page, the QR keeps rotating offline. Limit: the SW cannot read the session cookie, so a saved page is served to whoever opens the browser offline until logout, login or the next online ticket-page load.
+
+### Delivery, print and will-call
+`events.print_ok / willcall_ok / non_transferable`; the buyer's choice is `orders.delivery` (`mobile|print|willcall`), checked against the event inside `finalize` (`assertDelivery`). A print ticket page shows a static code `id.p.HMAC(secret, "id:print")`; `scanTicket` honours it only when `print_ok`, and admission is the same conditional `status = 'valid'` UPDATE, so print and mobile codes share one "used" state. `markPickedUp` is a conditional UPDATE on `picked_up_at IS NULL`, org-scoped through `authOrder` and audited. `assertTradable` (used by transfer create/accept and listing create) refuses `non_transferable` events.
+
+### Scalper flags
+`orders.ip` (never `local`) and `orders.card_fp` (HMAC of the card number, computed in `pay`, kept only as a fingerprint; `saved_cards.fp` for saved cards). `clusters()` groups live non-comp, non-resale orders by event and key and keeps groups with 3 or more distinct accounts. `flagScalpers(orderId)` runs in the order's transaction: it sets `users.flagged` for registered members of a cluster that includes the order and writes an actor-less `scalper.flag` audit row. `cancelCluster` (admin action, audited) recomputes the cluster from the database and calls `refundOrder` per order.
+
+### Guest order lookup
+`requestCode` mails a 6-digit code only when order id and email match, storing `mac("lookup:<order>:<code>")` in `lookup_codes` (older codes for the order die). The action layer answers identically either way and rate-limits per IP and per order number. `redeemCode` takes the newest unused, unexpired code with fewer than 5 attempts, compares with `timingSafeEqual`, counts wrong guesses, and consumes with a conditional UPDATE. Success returns the guest order's `access_token` (the same credential as the confirmation email) or `null` for an account order, which redirects to login.
+
+### Party links
+`userId.eventId.expiry.HMAC(party:...)` with the server secret (`lib/party.ts`); `partyView` selects seat labels and states for that user and event only. Expiry is 12 h after the show; there is no revocation.
+
+### Other
+Display currency is a cookie plus a fixed table (`lib/currency.ts`); stored and charged amounts are always USD cents. The protection step stores `holds.options.protection` as `true`, `false` or absent (absent redirects checkout to `/checkout/[id]/protection`). Express checkout is a prefill of `PayForm` plus a server-required CVC for saved cards. SEO: `lib/seo.ts` builds metadata and the sitemap list. Price alerts run inside `runAlerts`, deduplicated by `alerts_sent (user, 'price_target', 'event:<id>:<target cents>')`.
 
 ## Authentication and authorization
 

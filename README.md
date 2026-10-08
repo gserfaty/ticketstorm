@@ -2,7 +2,7 @@
 
 A Ticketmaster clone for learning and demo: Next.js 15 (App Router) + React 19 + TypeScript + SQLite via Node's built-in `node:sqlite`. No ORM, no database server, no external services. Payments, email, SMS and push are all simulated locally.
 
-Phases P1 to P11 of [docs/plan.md](docs/plan.md) are implemented. Design details are in [ARCHITECTURE.md](ARCHITECTURE.md), history in [CHANGELOG.md](CHANGELOG.md), the feature inventory that drives the plan in [docs/research.md](docs/research.md).
+Phases P1 to P11 and P12A (features 1 to 11 of the nice-to-have sweep) of [docs/plan.md](docs/plan.md) are implemented. Design details are in [ARCHITECTURE.md](ARCHITECTURE.md), history in [CHANGELOG.md](CHANGELOG.md), the feature inventory that drives the plan in [docs/research.md](docs/research.md).
 
 ## Requirements
 
@@ -45,6 +45,7 @@ Password for all: `password123`
 | `fan2@ticketstorm.test` | fan (one ticket listed for resale, and an order in **review**) |
 | `organizer@ticketstorm.test` | owner of org "Storm Live" |
 | `scanner@ticketstorm.test` | scanner in "Storm Live" |
+| `scalper1..3@ticketstorm.test` | three accounts that bought on `storm-rules-demo` with one card fingerprint and one IP (flagged; see `/admin/scalpers`) |
 | `admin@ticketstorm.test` | platform admin |
 
 Seed data (deterministic, `scripts/seed.ts`): 12 cities with tax rates, 9 venues generated in 5 layouts (arena, stadium, theater, amphitheater, club), 30 artists, and 92 events: 83 random ones (80 upcoming over the next 120 days, 3 past; a few cancelled, postponed or rescheduled; about 10 percent not yet on sale) plus the fixed scenarios below.
@@ -106,6 +107,15 @@ Enter a code, pick child (50 percent), senior (25) or student (20) per ticket, a
 - **Impersonation limits**: while viewing as a user you cannot buy, refund, exchange, transfer, sell, change security or payment settings, or use organizer and admin tools.
 - **Admin**: `/admin/fraud` (flagged users, busiest rate-limit keys, blocklist), `/admin/refunds` (all refunds), `/admin/audit`, `/admin/users` > "View as this user" (banner on every page, audited; security, payout, organizer and admin actions are disabled while viewing), `/help` for the FAQ and contact form.
 
+## Trying the P12A features
+
+- **Discovery**: `/map` (click a dot), `/discover` (Top picks, lists, city guides; `/discover/guide-toronto`), `/search?page=2` and `/category/music?page=2`, `/sitemap.xml`, `/robots.txt`. The event page shows related events, a map with directions, simulated weather and, when someone holds seats, "N people viewing".
+- **Seat map**: hover or Tab to a seat for the generated "View from seat"; row C seats 1 and 2 of every reserved section are limited-view (dashed ring, note at checkout). The map says "Live seat updates on" when the SSE stream is connected (open two browsers: a hold appears within about 3 seconds).
+- **Rules and flags**: `neon-harbor-empire-saturday` and `toronto-intl-demo` allow print-at-home and will-call (choose Delivery at checkout; a will-call order appears under the organizer's event orders with "Mark picked up"; print at `/tickets/<id>/print`). `neon-harbor-catskill-saturday` and `home-stand-1` are non-transferable (the ticket page says so and the server refuses). `fan@` has a price alert at $40 on the Saturday show: lower a level in the organizer's pricing, run `npm run jobs`, and the inbox shows it once.
+- **Scalpers**: `/admin/scalpers` shows the seeded cluster; "Cancel and refund" refunds those orders and frees the seats.
+- **Checkout**: add a card at `/account/payment` and an address in your profile, and checkout becomes express (CVC still required). A protection yes/no step comes first. Pick a display currency in the header; `toronto-intl-demo` also uses local tax. `/lookup`: enter a guest order's email and number, read the code in `/dev/outbox`. `/account/linked` is a labelled simulation.
+- **Tickets**: the ticket page has a countdown, a "party link" (open it logged out: seats only, no codes), offline saving (needs a browser that allows service workers), and "Reclaim ticket (cancel transfer)" while a transfer is pending.
+
 ## Test cards
 
 Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Behaviour is chosen by the last four digits. Card numbers and CVCs are never stored or logged; only brand and last4 are kept.
@@ -142,7 +152,7 @@ Checkout also asks a math question (single-use captcha) and has a hidden honeypo
 
 - **Ticket states, rules, payouts, ops (P11)**: moving band and blur on the QR, mock wallet pass, NFC demo, ticket state everywhere, per-event transfer deadline and resale floor/ceiling/fees, seller payouts, organizer reports with CSV, settlement and marketing, admin fraud/refund/audit/support tools, impersonation, help center. See below.
 
-Upcoming (see [docs/plan.md](docs/plan.md)): P12 nice-to-have sweep.
+Upcoming (see [docs/plan.md](docs/plan.md)): P12B, features 12 to 22 of the nice-to-have sweep.
 
 ## Simulated external systems
 

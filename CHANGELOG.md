@@ -2,6 +2,49 @@
 
 All notable changes, newest first. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no version numbers yet; each section is a commit. Review-fix commits are grouped under their phase.
 
+## P12A: nice-to-have sweep, features 1 to 11
+
+Verified, not rebuilt: the Verified Fan waitlist (P7: `promoteWaitlist` gives codes to waitlisted fans when selected ones do not buy), transfer to a non-user by SMS link (`createTransfer` with a phone number texts a claim link; the recipient signs up to accept), and "reclaim" (= `cancelTransfer`; the ticket page button is now labelled "Reclaim ticket (cancel transfer)").
+
+#### Added: discovery and SEO (1/6)
+- **`/map`**: SVG lat/lng map of venues with upcoming events (equirectangular, no tiles or scripts; dot size = event count; category chips and any `/search` filter work; a dot lists that venue's events). **Discover** (`/discover`, `/discover/[slug]`): seeded editorial lists and city guides (table `discover`; a guide also shows the city's venues and next events), a **Top picks** rail (most popular upcoming event per category) on the home page and Discover.
+- **Pagination**: `?page=` on `/search` and `/category/[slug]` (20 per page, `lib/discover.ts pageMath` clamps junk page numbers, `searchEvents` got an `offset`); "Showing N of M events" is kept and a Prev/Next `Pager` keeps every filter in the URL.
+- **SEO**: `generateMetadata` (title, description, canonical, Open Graph through `lib/seo.ts pageMeta`) on event, venue, artist, category and discover pages; `app/sitemap.ts` (`sitemapEntries()`: only non-draft, approved, upcoming events, plus venues, artists, categories, discover) and `app/robots.ts` (private areas disallowed).
+- Event page: related events (same category and genre or shared artist, never the same tour), venue mini map and an OpenStreetMap directions link, **simulated** deterministic weather (`lib/weather.ts`, sha256 of date and city, labelled as simulated), "N people viewing" (distinct sessions with an active hold plus waiting-room entries seen in the last 5 minutes; a count, no identities), on-sale countdown (`components/Until.tsx`).
+
+#### Added: seat map extras (2/6)
+- **View from seat** (`components/SeatView.tsx`): an SVG perspective generated from the seat's chart position (distance, side, elevation), shown for the hovered or focused seat; captioned as an illustration. Seats with `obstructed = 1` get a pillar in the picture, a dashed orange ring and "limited view" in the tooltip, the aria label, the legend and a note on the checkout page. Map seat flags are now `1 accessible, 2 companion, 4 limited view`; the accessible filter masks with `& 3`.
+- **SSE** `GET /api/events/[id]/stream` (`lib/stream.ts`): sends `getAvailability()` (seat id, status letter, level id, GA counts) whenever it changes, a heartbeat comment otherwise. It carries no hold ids, session tokens or owners (tested structurally). At most 100 open streams process-wide (then 503 + `Retry-After`), each ends after 5 minutes or on client abort (timers and the counter are released). `SeatMap` uses `EventSource` and falls back to the old 5 s polling when SSE is missing, refused or dropped.
+
+#### Added: ticket rules and flags (3/6)
+- **Per-event flags** (organizer form "Delivery and ticket restrictions", audited `rules.delivery`): `print_ok` (otherwise mobile only), `willcall_ok`, `non_transferable`.
+- **Non-transferable** is enforced in `assertTradable`, which transfer create, transfer accept and listing creation all call, and shown on the event and ticket pages.
+- **Delivery choice at checkout** (mobile, print at home, will-call), validated server-side against the event in `finalize` (`assertDelivery`); resale purchases are always mobile. Stored in `orders.delivery`.
+- **Print-at-home**: `/tickets/[id]/print` (owner, valid ticket, print-enabled events only) draws a static code (`makePrintToken`, `id.p.HMAC(secret, "id:print")`); `scanTicket` accepts it only when `print_ok`, and the same conditional UPDATE means the first scan wins (the mobile code of a used ticket is dead too).
+- **Will-call**: the organizer orders page lists will-call orders; "Mark picked up" (`orderPickup`, box office, manager or owner of the order's own org, audited `order.pickup`) is one conditional UPDATE, so it cannot happen twice.
+- **Price alerts** (`lib/pricealerts.ts`, table `price_alerts`, form on the event page, `requireSelf`): the job compares the cheapest face price (fees and the all-in toggle do not matter) with the target and notifies once per (user, event, target) through `alerts_sent`; changing the target re-arms it.
+- **Scalper flagging** (`lib/scalpers.ts`): orders record `ip` (never `local`) and `card_fp` (keyed hash of the card number, never the number; saved cards keep it in `saved_cards.fp`). Three or more different accounts (by email) with live orders on one event sharing a fingerprint or IP flag their registered accounts (`users.flagged`, audit row `scalper.flag` with no actor). `/admin/scalpers` lists clusters; "Cancel and refund" recomputes the cluster from the database and calls `refundOrder` per order (audited `scalper.cancel_orders`).
+
+#### Added: checkout extras (4/6)
+- **Express checkout**: with a card in the wallet and a full address in the profile, checkout preselects the default card, fills the billing address and says so. A saved card now always needs its CVC typed again (server-checked; it is never stored). Not offered while impersonating, and `pay` still refuses then.
+- **Card wallet** (`/account/payment`, tab "Wallet"): add a card (validated, then only brand, last four, expiry and a keyed fingerprint are kept), make default, delete; five cards at most.
+- **Display currency**: header selector (cookie), fixed rate table in `lib/currency.ts` (EUR, GBP, CAD, AUD, MXN, JPY), amounts shown as "≈ €50.60" on cards, the event page and the checkout total; always labelled approximate, and checkout charges USD. International events (`cities.country` not `US`, seed: Toronto) default to their local currency and label tax as local VAT/GST/HST.
+- **Protection step**: `/checkout/[holdId]/protection` asks yes or no once (stored as `holds.options.protection`, `false` counts as answered); the checkbox on the options form stays.
+- **Guest order lookup** `/lookup`: email plus order number mails a 6-digit code to the order's address (`lookup_codes`, keyed hash only). The page answers identically whether or not the order exists; limits per IP and per order number; a code works once, for 15 minutes and 5 guesses; success opens a guest order with its access token, or sends an account order's owner to log in.
+- **Simulated vendor linking** (`/account/linked`): three invented vendors; linking records a row and imports nothing. In the GDPR export and removed on account deletion, as are price alerts.
+
+#### Added: offline, party, print (5/6)
+- **Offline tickets**: `public/sw.js` (network first; serves a saved `/tickets` or `/tickets/<id>` page only when the network fails; keeps `/_next/static` scripts), `components/OfflineTickets.tsx` saves the owner's pages into one cache per user id and deletes any other user's. The cache is cleared by any POST to `/logout`, `/login`, `/signup` or `/auth`. The QR rotates offline because `TicketQR` computes the HMAC in the browser.
+- **Share with party** `/party/[token]`: signed read-only link (`lib/party.ts`, `userId.eventId.expiry.HMAC`, expiry 12 h after the show) listing seats and states; never a secret, QR, email or payment detail; tamper or expiry gives 404.
+- Countdown to the show on the ticket page.
+
+#### Tests
+- `tests/p12.test.ts` (pagination math, offset walk, sitemap visibility, weather determinism, viewer count, related events, SSE payload and connection cap, non-transferable enforcement, price-alert idempotency, delivery and print scan, will-call, scalper flag and bulk cancel, lookup single use, expiry and lockout, currency, protection step, wallet, party token tamper) and `tests/sw.test.ts` (the service worker run against fake globals).
+
+#### Known limits
+- The browser pane used for verification refuses to register service workers, so offline behaviour is covered by `tests/sw.test.ts` plus the cache-writing code path, not by a real DevTools-offline run.
+- Scalper thresholds are constants; the shared test card 4242 trips them on purpose when three accounts use it on one event. Party links cannot be revoked before they expire. A static print code can be copied; first scan wins.
+
 ## P11 review fixes
 
 #### Fixed
