@@ -152,6 +152,11 @@ export async function removePromoAction(f: FormData) {
   run(e.back, () => { org.removePromo(e.org_id, num(f, 'promoId')); audit(e.user.id, 'promo.remove', `event:${e.id}`, { promoId: num(f, 'promoId') }) })
 }
 
+export async function expirePromoAction(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { org.expirePromo(e.org_id, num(f, 'promoId')); audit(e.user.id, 'promo.expire', `event:${e.id}`, { promoId: num(f, 'promoId') }) })
+}
+
 export async function saveOffer(f: FormData) {
   const e = await authEvent(f)
   run(e.back, () => { org.setOffer(e.id, text(f, 'name'), f.get('pct')); audit(e.user.id, 'offer.set', `event:${e.id}`, { name: text(f, 'name'), pct: text(f, 'pct') }) })

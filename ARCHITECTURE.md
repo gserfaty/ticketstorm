@@ -124,8 +124,8 @@ Expiry is **lazy**: a held row whose `held_until` is in the past is simply claim
 1. **Level price**: `dynamicPrice(level, demand)` = `clamp(base x (1 + k x sold% + j x queueFactor), min, max)`; `demand()` reads sold share of the event and the waiting-room depth. Fixed levels (k = j = 0) return the base.
 2. **Lock**: `lockPrices` stores the result in `inventory.locked_cents` when the seats are held. `quote()` reads only that column (falling back to the level price for rows without one), so changing k, min, max or demand never changes an open hold, and `finalize` charges exactly what the shopper saw.
 3. **Offers** reduce the locked face per ticket (percent from `offers`), chosen at checkout and stored in `holds.options`.
-4. **Fees and tax** (`price()`, pure): per ticket `service_pct` of face plus `facility_cents`, tax (city `tax_rate_bps`) on face plus those fees, plus one untaxed per-order fee (`order_cents + delivery_cents`). The rule is built-in defaults, then `settings.fee_defaults` (`/admin/fees`), then the event's `fee_rule`, merged per field on every quote, so an admin change shows up in the next quote.
-5. **Add-ons** add `qty x price` to the subtotal (no fee, no tax). **Promo**: `findPromo` validates code, scope, expiry and uses; the discount is `min(code value, ticket subtotal)` and is subtracted from the total.
+4. **Fees and tax** (`price()`, pure), run on the face after the promo discount (see 5): per ticket `service_pct` of face plus `facility_cents`, tax (city `tax_rate_bps`) on face plus those fees, plus one untaxed per-order fee (`order_cents + delivery_cents`). The rule is built-in defaults, then `settings.fee_defaults` (`/admin/fees`), then the event's `fee_rule`, merged per field on every quote, so an admin change shows up in the next quote.
+5. **Promo**: `findPromo` validates code, scope, expiry and uses (one "Invalid promo code" message for every failure); the discount is `min(code value, ticket subtotal)`, spread over the tickets pro rata (`allocate`) before step 4, and also subtracted from the total as its own line. **Add-ons** add `qty x price` to the subtotal with no fees; merch, food and hospitality are taxed at the city rate, parking is not.
 6. `total = subtotal + fees + tax - discount`. Display uses the same `price()`: `shown(cents, ctx, allIn)` adds the ticket's own fees and tax when the `allin` cookie is set, and every page that shows a price goes through `displayLevels` / `displayRange` / `shown`, so listings never disagree with checkout.
 
 `quote()` is pure with respect to the hold: it reads locked prices and `holds.options`, so `finalize`, the 3DS approval and the checkout page produce the same answer unless the shopper changes options (then the amounts differ and the 3DS approval is refused with "Price changed").
@@ -226,7 +226,7 @@ Marked `ponytail:` in code:
 
 Other known gaps:
 
-- Add-ons carry no fee or tax; fees and tax are computed on the pre-discount face (the promo comes off the total). Offers are not locked at hold time. The seat map shows dynamic prices as of page load. Queue-depth demand (`j`) is the people waiting divided by 100, a fixed constant.
+- Add-ons carry no service or facility fee (parking is also untaxed). Offers are not locked at hold time. The seat map shows dynamic prices as of page load. Queue-depth demand (`j`) is the people waiting (joined or polled in the last 2 minutes) divided by 100, a fixed constant.
 - No seller fee, payouts, or per-event transfer/resale rules (P11). Ticket status `expired` and transfer expiry are checked lazily but no job sets them.
 - No 2FA, social login, account pages, protection, partial refunds or exchanges (P9). `oauth_links` and `codes.kind = 'otp'` are schema only.
 - Notifications have no inbox page; email/SMS are outbox-only.

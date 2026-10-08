@@ -52,7 +52,7 @@ export function joinQueue(eventId: number, sessionToken: string, userId: number 
     }
     const pre = !!ev.onsale_at && Date.parse(ev.onsale_at) > now
     const rank = pre ? randomInt(1, 1_000_000_000) : ((db.prepare('SELECT max(rank) AS m FROM queue_entries WHERE event_id = ?').get(eventId) as { m: number | null }).m ?? 0) + 1
-    db.prepare('INSERT INTO queue_entries (event_id, session_token, user_id, rank, joined_at) VALUES (?,?,?,?,?)').run(eventId, sessionToken, userId, rank, iso(now))
+    db.prepare('INSERT INTO queue_entries (event_id, session_token, user_id, rank, joined_at, seen_at) VALUES (?,?,?,?,?,?)').run(eventId, sessionToken, userId, rank, iso(now), iso(now))
   })
 }
 
@@ -80,6 +80,7 @@ export function queueStatus(eventId: number, sessionToken: string, now = Date.no
       | { id: number; rank: number; admitted_at: string | null; expires_at: string | null }
       | undefined
     if (!e) return { state: 'none' as const }
+    db.prepare('UPDATE queue_entries SET seen_at = ? WHERE id = ?').run(iso(now), e.id)
     if (e.admitted_at) return e.expires_at! > iso(now) ? { state: 'admitted' as const, expiresAt: e.expires_at! } : { state: 'expired' as const }
     const ahead = (db
       .prepare('SELECT count(*) AS n FROM queue_entries WHERE event_id = ? AND admitted_at IS NULL AND (rank < ? OR (rank = ? AND id < ?))')

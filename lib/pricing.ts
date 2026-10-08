@@ -42,16 +42,18 @@ export function pricingCtx(eventId: number): Ctx {
 }
 
 export type Line = { inventoryId: number; eventId: number; label: string; base: number; unit: number; fee: number; tax: number; offerId?: number; offer?: string; listingId?: number }
-export type AddonLine = { addonId: number; name: string; kind: string; qty: number; unit: number }
+export type AddonLine = { addonId: number; name: string; kind: string; qty: number; unit: number; taxEach: number }
+// Merch, food and hospitality are taxed at the city rate; parking is not. No service or facility fees on any add-on.
+const TAXED_ADDONS = ['merch', 'food', 'hospitality']
 export type Quote = {
   lines: Line[]
   addons: AddonLine[]
-  subtotal: number // tickets (after offers) + add-ons
+  subtotal: number // tickets (after offers, before promo) + add-ons
   fees: number
   orderFee: number
   tax: number
   discount: number
-  total: number // subtotal + fees + tax - discount
+  total: number // subtotal + fees + tax - discount; fees and tax are computed on the face AFTER the promo discount
   promo?: { id: number; code: string }
   promoError?: string
 }
@@ -72,6 +74,7 @@ export function price(units: number[], rule: FeeRule, taxBps: number) {
 // ---- dynamic / platinum pricing ----
 export type Dyn = { price_cents: number; dyn_min_cents: number | null; dyn_max_cents: number | null; dyn_k: number | null; dyn_j: number | null }
 export type Demand = { soldPct: number; queueFactor: number }
+const QUEUE_FRESH_MS = 120_000 // a waiting entry counts only if it joined or polled in the last 2 minutes
 const QUEUE_FULL = 100 // this many people waiting = queue factor 1
 
 // price = clamp(base * (1 + k * sold% + j * queueDepthFactor), min, max). No min -> base; no max -> uncapped. k = j = 0 -> base.
@@ -83,7 +86,7 @@ export function dynamicPrice(l: Dyn, d: Demand): number {
 // sold% = sold units / sellable (non-blocked) units of the event; queue factor = people still waiting, capped at 1.
 export function demand(eventId: number): Demand {
   const r = db.prepare("SELECT coalesce(sum(status = 'sold'), 0) AS sold, count(*) AS total FROM inventory WHERE event_id = ? AND status != 'blocked'").get(eventId) as { sold: number; total: number }
-  const q = db.prepare('SELECT count(*) AS n FROM queue_entries WHERE event_id = ? AND admitted_at IS NULL').get(eventId) as { n: number }
+  const q = db.prepare('SELECT count(*) AS n FROM queue_entries WHERE event_id = ? AND admitted_at IS NULL AND seen_at > ?').get(eventId, new Date(Date.now() - QUEUE_FRESH_MS).toISOString()) as { n: number }
   return { soldPct: r.total ? r.sold / r.total : 0, queueFactor: Math.min(q.n / QUEUE_FULL, 1) }
 }
 
@@ -139,13 +142,21 @@ export function findPromo(code: string, eventId: number): Promo {
        WHERE p.code = ? AND (p.event_id = e.id OR (p.event_id IS NULL AND (p.org_id IS NULL OR p.org_id = e.org_id)))`,
     )
     .get(eventId, code.trim()) as Promo | undefined
-  if (!p) throw new UserError('Unknown promo code')
-  if (p.expires_at && p.expires_at <= new Date().toISOString()) throw new UserError('This promo code has expired')
-  if (p.uses >= p.max_uses) throw new UserError('This promo code has been used up')
+  // one message for unknown, expired and used-up codes, so guessing reveals nothing
+  if (!p || (p.expires_at && p.expires_at <= new Date().toISOString()) || p.uses >= p.max_uses) throw new UserError('Invalid promo code')
   return p
 }
 
 // Never more than the ticket subtotal.
+// Split a discount across ticket prices pro rata, whole cents, the remainder on the last priced ticket.
+export function allocate(units: number[], discount: number): number[] {
+  const sum = units.reduce((a, b) => a + b, 0)
+  const out = units.map((u) => (sum ? Math.floor((discount * u) / sum) : 0))
+  const last = units.map((u) => u > 0).lastIndexOf(true)
+  if (last >= 0) out[last] += discount - out.reduce((a, b) => a + b, 0)
+  return out
+}
+
 export const discountFor = (p: Pick<Promo, 'kind' | 'amount'>, subtotal: number) =>
   Math.min(p.kind === 'pct' ? Math.round((subtotal * p.amount) / 100) : p.amount, subtotal)
 
@@ -208,7 +219,21 @@ export function quote(holdId: number): Quote {
   }
   const offers = rows.map((r) => (r.event_id === hold.event_id ? offerOf(r.id) : undefined))
   const units = rows.map((r, i) => (r.event_id === hold.event_id ? Math.round((r.price_cents * (100 - (offers[i]?.pct_off ?? 0))) / 100) : 0))
-  const p = price(units, ctx.rule, ctx.bps)
+  // promo first: the discount is spread over the tickets and fees and tax are computed on what is left
+  let promo: Promo | undefined
+  let promoError: string | undefined
+  if (opts.promo) {
+    try {
+      promo = findPromo(opts.promo, hold.event_id)
+    } catch (e) {
+      if (!(e instanceof UserError)) throw e
+      promoError = e.message
+    }
+  }
+  const faceTotal = units.reduce((a, b) => a + b, 0)
+  const discount = promo ? discountFor(promo, faceTotal) : 0
+  const share = allocate(units, discount)
+  const p = price(units.map((u, i) => u - share[i]), ctx.rule, ctx.bps)
   const lines: Line[] = rows.map((r, i) => ({
     inventoryId: r.id,
     eventId: r.event_id,
@@ -224,24 +249,15 @@ export function quote(holdId: number): Quote {
   const addons: AddonLine[] = []
   for (const [id, qty] of Object.entries(opts.addons ?? {})) {
     const a = db.prepare('SELECT id, name, kind, price_cents FROM addons WHERE id = ? AND event_id = ?').get(Number(id), hold.event_id) as { id: number; name: string; kind: string; price_cents: number } | undefined
-    if (a && qty > 0) addons.push({ addonId: a.id, name: a.name, kind: a.kind, qty, unit: a.price_cents })
+    if (a && qty > 0) addons.push({ addonId: a.id, name: a.name, kind: a.kind, qty, unit: a.price_cents, taxEach: TAXED_ADDONS.includes(a.kind) ? Math.round((a.price_cents * ctx.bps) / 10000) : 0 })
   }
   const addonTotal = addons.reduce((n, a) => n + a.qty * a.unit, 0)
 
-  let promo: Promo | undefined
-  let promoError: string | undefined
-  if (opts.promo) {
-    try {
-      promo = findPromo(opts.promo, hold.event_id)
-    } catch (e) {
-      if (!(e instanceof UserError)) throw e
-      promoError = e.message
-    }
-  }
-  const discount = promo ? discountFor(promo, p.subtotal) : 0
-  const subtotal = p.subtotal + addonTotal
+  const addonTax = addons.reduce((n, a) => n + a.qty * a.taxEach, 0)
+  const subtotal = faceTotal + addonTotal
+  const tax = p.tax + addonTax
   return {
-    lines, addons, subtotal, fees: p.fees, orderFee: p.orderFee, tax: p.tax, discount, total: subtotal + p.fees + p.tax - discount,
+    lines, addons, subtotal, fees: p.fees, orderFee: p.orderFee, tax, discount, total: subtotal + p.fees + tax - discount,
     ...(promo ? { promo: { id: promo.id, code: promo.code } } : {}),
     ...(promoError ? { promoError } : {}),
   }

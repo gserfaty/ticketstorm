@@ -22,6 +22,19 @@ All notable changes, newest first. Format follows [Keep a Changelog](https://kee
 
 ---
 
+## P8 review fixes
+
+#### Fixed
+- **Bundles could not be bought**: the per-account limit counted every bundled game's line (3 bundle seats looked like 3 tickets per game). `finalize` now counts only the hold event's lines and the held-seat count in `assertTicketLimit` adds `i.event_id = h.event_id`. Test buys a 3-game bundle with a limit of 2.
+- **Tax on discounted tickets**: a promo is now allocated pro rata across the ticket lines (whole cents, remainder on the last priced line) before `price()` runs, so service fee, facility charge and tax are computed on the discounted face. The discount is still its own negative `order_items` row and `sum(items) == total` holds.
+- **Add-ons were untaxed**: merch, food and hospitality are taxed at the city rate (`order_items.tax_cents` per unit); parking stays untaxed. No fees on any add-on.
+- **Promo brute force**: `applyOptions` is rate limited (10/min per IP and account, like access codes) and unknown, expired and used-up codes all answer "Invalid promo code".
+- **`setDynamic`** accepted a max below or a min above the base price; it now requires min <= base <= max.
+- **Used promo codes could be deleted** (order pages then showed a blank code). Deletion is refused once `uses > 0`; organizers get an "Expire now" button (`promo.expire`, audited). Deleting an unknown or other organization's id now reports "Promo code not found".
+- **Queue factor counted abandoned entries**: `queue_entries.seen_at` is set on join and on every poll, and `demand()` counts only waiting entries seen in the last 2 minutes.
+
+---
+
 ## P8: Pricing, ticket types, add-ons, inventory rules
 
 ### b3cd498 (2026-10-08) P8: pricing, ticket types, add-ons, inventory rules
@@ -55,7 +68,7 @@ All notable changes, newest first. Format follows [Keep a Changelog](https://kee
 - An unlocked presale could only be reached by typing the tickets URL. The event page now shows a "Find presale tickets" button (and the public on-sale date) to a session that has unlocked an open window before the public on-sale.
 
 #### Known limitations
-- Tax is charged on tickets only; add-ons carry no fee or tax. Fees and tax are computed on the pre-discount face (the promo comes off the total).
+- Add-ons carry no service or facility fee.
 - Displayed prices on an open seat map do not refresh dynamic prices until reload; the hold locks the real price and checkout shows it.
 - Offers are not locked at hold time (only face price is); promo and offer choices live on the hold and are cleared when the shopper replaces the hold.
 

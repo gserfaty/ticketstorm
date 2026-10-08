@@ -170,7 +170,8 @@ export function setDynamic(eventId: number, levelId: number, f: { min: string; m
   const min = f.min === '' ? null : cents(f.min, 'Minimum')
   const max = f.max === '' ? null : cents(f.max, 'Maximum')
   if ((k > 0 || j > 0) && max === null) throw new UserError('Set a maximum price for a dynamic level')
-  if (min !== null && max !== null && min > max) throw new UserError('Minimum must not be above the maximum')
+  if (min !== null && min > lv.price_cents) throw new UserError('Minimum must not be above the base price')
+  if (max !== null && max < lv.price_cents) throw new UserError('Maximum must not be below the base price')
   db.prepare('UPDATE price_levels SET dyn_min_cents = ?, dyn_max_cents = ?, dyn_k = ?, dyn_j = ? WHERE id = ?').run(min, max, k || null, j || null, levelId)
 }
 
@@ -198,8 +199,16 @@ export function addPromo(orgId: number, eventId: number, f: PromoForm) {
   }
 }
 
+// Used codes stay (orders point at them); stop them with expirePromo instead.
 export function removePromo(orgId: number, promoId: number) {
+  const p = db.prepare('SELECT uses FROM promo_codes WHERE id = ? AND org_id = ?').get(promoId, orgId) as { uses: number } | undefined
+  if (!p) throw new UserError('Promo code not found')
+  if (p.uses > 0) throw new UserError('This code has been used and cannot be deleted. Expire it instead.')
   db.prepare('DELETE FROM promo_codes WHERE id = ? AND org_id = ?').run(promoId, orgId)
+}
+
+export function expirePromo(orgId: number, promoId: number) {
+  if (!db.prepare('UPDATE promo_codes SET expires_at = ? WHERE id = ? AND org_id = ?').run(new Date().toISOString(), promoId, orgId).changes) throw new UserError('Promo code not found')
 }
 
 // ---- offers (child / senior / student % off per ticket; 0 removes) and add-ons ----

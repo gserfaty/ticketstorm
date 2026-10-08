@@ -54,7 +54,8 @@ export function finalize(i: PayInput): PayResult {
     const q = quote(i.holdId)
     if (!q.lines.length) throw new HoldError('Nothing to buy', 410)
     if (q.promoError) throw new HoldError(q.promoError, 409)
-    assertTicketLimit(i.userId, hold.event_id, q.lines.length, i.sessionToken, i.email)
+    // bundle holds carry one line per game; only this event's own tickets count against this event's limit
+    assertTicketLimit(i.userId, hold.event_id, q.lines.filter((l) => l.eventId === hold.event_id).length, i.sessionToken, i.email)
     const meta: Meta = { userId: i.userId, email: i.email, exp: i.exp, save: i.save, billing: i.billing }
     const { payment } = recordCharge({ key: i.key, holdId: i.holdId, sessionToken: i.sessionToken, amount: q.total, method: i.method, brand: i.brand, last4: i.last4, meta })
     return resolve(payment, i.sessionToken)
@@ -106,7 +107,7 @@ function createOrder(p: Payment): number {
   // so it has its own secret and SafeTix QR and is scanned like any ticket. one_live_ticket ignores NULL inventory_id.
   for (const a of q.addons) {
     for (let n = 0; n < a.qty; n++) {
-      db.prepare("INSERT INTO order_items (order_id, kind, addon_id, unit_cents) VALUES (?, 'addon', ?, ?)").run(order.id, a.addonId, a.unit)
+      db.prepare("INSERT INTO order_items (order_id, kind, addon_id, unit_cents, tax_cents) VALUES (?, 'addon', ?, ?, ?)").run(order.id, a.addonId, a.unit, a.taxEach)
       if (PASS_KINDS.includes(a.kind)) db.prepare('INSERT INTO tickets (order_id, addon_id, owner_id, secret) VALUES (?,?,?,?)').run(order.id, a.addonId, m.userId, randomBytes(32).toString('hex'))
     }
   }

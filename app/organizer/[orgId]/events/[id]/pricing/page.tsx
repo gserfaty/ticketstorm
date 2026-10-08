@@ -4,7 +4,7 @@ import { db } from '../../../../../../lib/db.ts'
 import { fmtDateTime, money, toLocalInput } from '../../../../../../lib/format.ts'
 import { feeDefaults } from '../../../../../../lib/pricing.ts'
 import { loadEvent } from '../../../../guard.ts'
-import { addAddonAction, addLevel, addPromoAction, removeAddonAction, removeLevel, removePromoAction, repriceLevel, saveDynamic, saveFees, saveLimits, saveOffer, saveOnsale } from '../../../../actions.ts'
+import { addAddonAction, addLevel, addPromoAction, removeAddonAction, removeLevel, expirePromoAction, removePromoAction, repriceLevel, saveDynamic, saveFees, saveLimits, saveOffer, saveOnsale } from '../../../../actions.ts'
 
 export const dynamic = 'force-dynamic'
 
@@ -99,7 +99,7 @@ export default async function Pricing({ params, searchParams }: { params: Promis
         <div className="card" key={p.id}>
           <code>{p.code}</code> · {p.kind === 'pct' ? `${p.amount}% off` : `${money(p.amount)} off`} · {p.uses}/{p.max_uses} used · {p.event_id ? 'this event' : 'all your events'}
           {p.expires_at && <> · expires {fmtDateTime(p.expires_at, e.tz)}</>}
-          <form action={removePromoAction}>{hidden}<input type="hidden" name="promoId" value={p.id} /><button>Delete</button></form>
+          <form action={p.uses > 0 ? expirePromoAction : removePromoAction}>{hidden}<input type="hidden" name="promoId" value={p.id} /><button>{p.uses > 0 ? 'Expire now' : 'Delete'}</button></form>
         </div>
       ))}
       <form action={addPromoAction} className="stack">

@@ -147,15 +147,17 @@ test('promo: pct and fixed, per-event/global, expiry, discount capped at subtota
     P.setCheckoutOptions(h.holdId, s, { ...noOpts, promo: code })
     return h.holdId
   }
-  assert.throws(() => setup('pr0', 'NOPE'), /Unknown promo/)
-  assert.throws(() => setup('pr0', 'OLD'), /expired/)
-  assert.throws(() => setup('pr0', 'onlyhere', other.ev, [other.seat('A', 1), other.seat('A', 2)]), /Unknown promo/) // another event's code
+  assert.throws(() => setup('pr0', 'NOPE'), /Invalid promo code/)
+  assert.throws(() => setup('pr0', 'OLD'), /Invalid promo code/)
+  assert.throws(() => setup('pr0', 'onlyhere', other.ev, [other.seat('A', 1), other.seat('A', 2)]), /Invalid promo code/) // another event's code
   assert.ok(P.quote(setup('pr0', 'onlyhere')).discount === 500) // case-insensitive
 
   // discount can't exceed the ticket subtotal, and sum(items) still equals the total
   const huge = setup('pr1', 'HUGE', ev, [seat('A', 10), seat('A', 11)])
   const q = P.quote(huge)
   assert.equal(q.discount, q.subtotal)
+  assert.equal(q.tax, 0) // nothing left to tax after a 100% discount
+  assert.equal(q.fees, q.orderFee) // and no per-ticket fees either
   const ho = orderId(pay(huge, 'pr1'))
   assert.equal(itemSum(ho), get<{ total: number }>('SELECT total FROM orders WHERE id = ?', ho).total)
   assert.equal(get<{ discount: number }>('SELECT discount FROM orders WHERE id = ?', ho).discount, 20000)
@@ -170,10 +172,10 @@ test('promo: pct and fixed, per-event/global, expiry, discount capped at subtota
   assert.equal(get<{ uses: number }>("SELECT uses FROM promo_codes WHERE code = 'TEN'").uses, 1) // a retried/replayed payment counts once
   assert.ok('orderId' in ra && 'orderId' in pay(b, 'pr3'))
   const orders = count('orders')
-  assert.throws(() => pay(c, 'pr4'), /used up/)
+  assert.throws(() => pay(c, 'pr4'), /Invalid promo code/)
   assert.equal(count('orders'), orders)
   assert.equal(get<{ uses: number }>("SELECT uses FROM promo_codes WHERE code = 'TEN'").uses, 2)
-  assert.throws(() => setup('pr5', 'TEN', ev, [seat('B', 10), seat('B', 11)]), /used up/)
+  assert.throws(() => setup('pr5', 'TEN', ev, [seat('B', 10), seat('B', 11)]), /Invalid promo code/)
   assert.throws(() => db.prepare("UPDATE promo_codes SET uses = 3 WHERE code = 'TEN'").run()) // CHECK (uses <= max_uses)
 })
 
@@ -251,4 +253,75 @@ test('limits: per order, and per event across orders (account and same email)', 
   // a guest checking out with the same email is counted too
   const g = inv.holdSeats(ev, who('guest'), seats('A', 20, 2))
   assert.throws(() => pay(g.holdId, 'guest', { email: 'LIM@x.test' }), /Limit 8/)
+})
+
+test('promo discount is spread over the tickets and tax follows the discounted price', () => {
+  const { ev, seat } = makeEvent()
+  run("INSERT INTO promo_codes (code, kind, amount, max_uses) VALUES ('HALF', 'pct', 50, 10)")
+  const h = inv.holdSeats(ev, who('tx1'), [seat('A', 1), seat('A', 2), seat('A', 3)])
+  const full = P.quote(h.holdId)
+  P.setCheckoutOptions(h.holdId, 'tx1', { ...noOpts, promo: 'HALF' })
+  const q = P.quote(h.holdId)
+  assert.equal(q.discount, 15000)
+  const rule = P.pricingCtx(ev).rule
+  assert.equal(q.tax, P.price([5000, 5000, 5000], rule, 1000).tax) // tax on half price, not full
+  assert.ok(q.tax < full.tax)
+  assert.equal(q.total, q.subtotal + q.fees + q.tax - q.discount)
+  assert.deepEqual(P.allocate([10000, 10000, 10000], 10000), [3333, 3333, 3334]) // remainder on the last ticket
+  assert.deepEqual(P.allocate([0, 100, 100], 101), [0, 50, 51])
+  const o = orderId(pay(h.holdId, 'tx1'))
+  assert.equal(itemSum(o), get<{ total: number }>('SELECT total FROM orders WHERE id = ?', o).total)
+})
+
+test('add-on tax: merch, food and hospitality are taxed, parking is not', () => {
+  const { ev, seat } = makeEvent()
+  const park = run("INSERT INTO addons (event_id, kind, name, price_cents, inventory) VALUES (?, 'parking', 'P', 3000, 5)", ev)
+  const shirt = run("INSERT INTO addons (event_id, kind, name, price_cents, inventory) VALUES (?, 'merch', 'M', 2000, 5)", ev)
+  const h = inv.holdSeats(ev, who('at1'), [seat('A', 1), seat('A', 2)])
+  const base = P.quote(h.holdId).tax
+  P.setCheckoutOptions(h.holdId, 'at1', { ...noOpts, addons: { [park]: 1, [shirt]: 2 } })
+  const q = P.quote(h.holdId)
+  assert.equal(q.tax, base + 2 * 200) // 10% of $20 per shirt, none on parking
+  const o = orderId(pay(h.holdId, 'at1'))
+  assert.equal(itemSum(o), get<{ total: number }>('SELECT total FROM orders WHERE id = ?', o).total)
+})
+
+test('bundle: the per-account limit counts only this event\'s tickets, not the sibling games', () => {
+  const a = makeEvent({ limit: 2 })
+  const mk = (slug: string) => {
+    const e = run("INSERT INTO events (org_id, venue_id, slug, title, category, starts_at, status, onsale_at, ticket_limit) VALUES (?,?,?,?, 'music', ?, 'published', ?, 2)", orgId, a.venue, slug, slug, new Date(Date.now() + 864e5).toISOString(), new Date(Date.now() - 864e5).toISOString())
+    for (const name of ['General', 'Premium', 'VIP', 'Accessible']) run('INSERT INTO price_levels (event_id, name, price_cents, ticket_type) VALUES (?,?,10000,?)', e, name, 'standard')
+    inv.generateInventory(e)
+    return e
+  }
+  const e2 = mk('bund2'), e3 = mk('bund3')
+  const bundle = run('INSERT INTO price_levels (event_id, name, price_cents, ticket_type, event_ids) VALUES (?, ?, 20000, ?, ?)', a.ev, 'Bundle', 'standard', JSON.stringify([a.ev, e2, e3]))
+  db.prepare('UPDATE inventory SET price_level_id = ? WHERE id IN (?, ?)').run(bundle, a.seat('A', 1), a.seat('A', 2))
+  const user = run("INSERT INTO users (email, name, password_hash) VALUES ('bun@x.test','B','x')")
+  const h = inv.holdSeats(a.ev, who('bun1', user), [a.seat('A', 1), a.seat('A', 2)]) // 6 inventory rows, 2 tickets
+  assert.equal(P.quote(h.holdId).lines.length, 6)
+  const o = orderId(pay(h.holdId, 'bun1', { userId: user, email: 'bun@x.test' }))
+  assert.equal(itemSum(o), get<{ total: number }>('SELECT total FROM orders WHERE id = ?', o).total)
+})
+
+test('setDynamic needs min <= base <= max; promos in use cannot be deleted; unknown ones report an error', () => {
+  const { ev } = makeEvent()
+  const lv = (get<{ id: number }>("SELECT id FROM price_levels WHERE event_id = ? AND name = 'VIP'", ev)).id
+  assert.throws(() => org.setDynamic(ev, lv, { min: '', max: '50', k: '1', j: '' }), /Maximum must not be below/)
+  assert.throws(() => org.setDynamic(ev, lv, { min: '150', max: '200', k: '1', j: '' }), /Minimum must not be above/)
+  org.setDynamic(ev, lv, { min: '100', max: '200', k: '1', j: '' })
+  const promo = run("INSERT INTO promo_codes (org_id, code, kind, amount, max_uses, uses) VALUES (?, 'USEDONE', 'pct', 10, 5, 1)", orgId)
+  assert.throws(() => org.removePromo(orgId, promo), /Expire it instead/)
+  assert.throws(() => org.removePromo(orgId, 999999), /not found/)
+  assert.throws(() => org.removePromo(orgId + 1, promo), /not found/) // another org's id
+  org.expirePromo(orgId, promo)
+  assert.throws(() => P.findPromo('USEDONE', ev), /Invalid promo code/)
+})
+
+test('queue demand ignores entries that stopped polling', () => {
+  const { ev } = makeEvent()
+  const ins = (t: string, seen: string) => run("INSERT INTO queue_entries (event_id, session_token, rank, joined_at, seen_at) VALUES (?,?,1,?,?)", ev, t, seen, seen)
+  ins('fresh', new Date().toISOString())
+  ins('gone', new Date(Date.now() - 600_000).toISOString())
+  assert.equal(P.demand(ev).queueFactor, 1 / 100)
 })

@@ -502,6 +502,7 @@ CREATE TABLE IF NOT EXISTS queue_entries (
   joined_at TEXT NOT NULL,
   admitted_at TEXT,
   expires_at TEXT,
+  seen_at TEXT, -- last join/poll; people who stopped polling no longer count as demand
   UNIQUE(event_id, session_token)
 );
 CREATE INDEX IF NOT EXISTS queue_order ON queue_entries(event_id, admitted_at, rank);

@@ -86,6 +86,8 @@ export async function applyOptions(f: FormData) {
     const m = /^(offer|addon)-(\d+)$/.exec(k)
     if (m) (m[1] === 'offer' ? offers : addons)[Number(m[2])] = Number(v)
   }
+  const promo = field(f, 'promo')
+  if (promo && !allowed('promo', clientIp(await headers()), (await getUser())?.id ?? null, 10)) back(holdId, 'Too many attempts, wait a minute')
   try {
     setCheckoutOptions(holdId, session!.token, { promo: field(f, 'promo'), offers, addons })
   } catch (e) {

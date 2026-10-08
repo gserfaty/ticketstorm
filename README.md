@@ -68,7 +68,7 @@ Seed data (deterministic, `scripts/seed.ts`): 12 cities with tax rates, 9 venues
 | `STORM10` | 10 percent off tickets, any event, 1000 uses |
 | `FIVEOFF` | $5 off, `neon-harbor-empire-saturday` only, 100 uses |
 
-Enter a code, pick child (50 percent), senior (25) or student (20) per ticket, and add parking, merch or hospitality on the checkout page, then press "Update order". The header button "All-in prices" switches every displayed price between face value and face + fees + tax. Admin sets platform fees at `/admin/fees` and per-city tax at `/admin/taxes`; organizers set limits, dynamic pricing, fees, offers, add-ons and promo codes at `/organizer/[orgId]/events/[id]/pricing`. Parking and hospitality purchases create their own QR passes under My tickets, scannable at `/scan/[eventId]`.
+Enter a code, pick child (50 percent), senior (25) or student (20) per ticket, and add parking, merch or hospitality on the checkout page, then press "Update order". Promo discounts reduce the taxable amount; merch and hospitality are taxed, parking is not. The header button "All-in prices" switches every displayed price between face value and face + fees + tax. Admin sets platform fees at `/admin/fees` and per-city tax at `/admin/taxes`; organizers set limits, dynamic pricing, fees, offers, add-ons and promo codes at `/organizer/[orgId]/events/[id]/pricing`. Parking and hospitality purchases create their own QR passes under My tickets, scannable at `/scan/[eventId]`.
 
 ## Test cards
 
