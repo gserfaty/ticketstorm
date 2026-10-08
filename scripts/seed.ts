@@ -2,6 +2,7 @@
 import { db, tx } from '../lib/db.ts'
 import { hashPassword } from '../lib/auth.ts'
 import { generateVenue, venueCapacity } from '../lib/venue-gen.ts'
+import { generateInventory } from '../lib/inventory.ts'
 import type { VenueKind } from '../lib/venue-gen.ts'
 
 if (db.prepare('SELECT count(*) AS n FROM users').get()!.n) {
@@ -156,10 +157,15 @@ tx(() => {
     `INSERT INTO events (org_id, venue_id, series_key, slug, title, category, genre, starts_at, doors_at, description, info, status, onsale_at, popularity)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
   const insLevel = db.prepare('INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type) VALUES (?,?,?,?,?)')
-  const addLevels = (eventId: number, base: number) => {
-    insLevel.run(eventId, 'General', '#3b82f6', base * 100, 'standard')
-    insLevel.run(eventId, 'Premium', '#a855f7', base * 200, 'standard')
-    insLevel.run(eventId, 'VIP', '#f59e0b', base * 400, 'vip')
+  // Levels match generateInventory: Standing only where the venue has GA areas, Accessible only where it has reserved seats.
+  const addLevels = (eventId: number, base: number, kind: VenueKind) => {
+    if (kind !== 'club') {
+      insLevel.run(eventId, 'General', '#3b82f6', base * 100, 'standard')
+      insLevel.run(eventId, 'Premium', '#a855f7', base * 200, 'standard')
+      insLevel.run(eventId, 'VIP', '#ec4899', base * 400, 'vip')
+      insLevel.run(eventId, 'Accessible', '#14b8a6', base * 100, 'accessible')
+    }
+    if (kind !== 'theater') insLevel.run(eventId, 'Standing', '#22c55e', base * 100, 'standing')
   }
   const insBill = db.prepare('INSERT INTO event_artists (event_id, artist_id, billing) VALUES (?,?,?)')
   
@@ -190,7 +196,7 @@ tx(() => {
         `${title}. One night only.`, json({ age: 'All ages', bag: 'Clear bags only', notices: '', set_times: [] }),
         status, new Date(onsale).toISOString(), int(0, 100)).lastInsertRowid)
     insBill.run(id, a.id, 0)
-    addLevels(id, a.category === 'sports' ? int(40, 90) : int(25, 70))
+    addLevels(id, a.category === 'sports' ? int(40, 90) : int(25, 70), v.kind)
     if (a.category === 'music' && rnd() < 0.3) insBill.run(id, pick(artistRows.filter((b) => b.category === 'music' && b.id !== a.id)).id, 1)
   })
 
@@ -217,7 +223,30 @@ tx(() => {
         json({ age: 'All ages', bag: 'Clear bags only', notices: '', set_times: [] }), status,
         new Date(today + onsaleOff * DAY).toISOString(), 90).lastInsertRowid)
     insBill.run(id, fixedArtist.id, 0)
-    addLevels(id, 50)
+    addLevels(id, 50, v.kind)
+  }
+
+  // Three-game home stand at Empire Arena with a bundle level: holding a seat in section 202 holds it in all three games.
+  const sports = artistRows.filter((a) => a.category === 'sports')
+  const series = [20, 27, 34].map((off, i) => {
+    const v = venueRows[0]
+    const d = new Date(today + off * DAY)
+    const title = `${sports[0].name} vs ${sports[i + 1].name} (Home Stand ${i + 1}/3)`
+    const startsAt = localToUtc(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 19, 0, v.tz)
+    const id = Number(
+      insEvent.run(orgId, v.id, 'home-stand', `home-stand-${i + 1}`, title, 'sports', sports[0].genre, startsAt,
+        new Date(Date.parse(startsAt) - 3_600_000).toISOString(), `${title}. Season bundle available.`,
+        json({ age: 'All ages', bag: 'Clear bags only', notices: '', set_times: [] }), 'published',
+        new Date(today - 10 * DAY).toISOString(), 80).lastInsertRowid)
+    insBill.run(id, sports[0].id, 0)
+    addLevels(id, 60, v.kind)
+    return id
+  })
+  db.prepare("INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type, event_ids) VALUES (?,?,?,?,?,?)")
+    .run(series[0], 'Season Bundle', '#f97316', 15000, 'standard', json(series))
+
+  for (const e of db.prepare('SELECT id, series_key FROM events').all() as { id: number; series_key: string }[]) {
+    generateInventory(e.id, e.id === series[0] ? '202' : null)
   }
 })
 

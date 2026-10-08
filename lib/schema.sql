@@ -184,7 +184,8 @@ CREATE TABLE IF NOT EXISTS price_levels (
   price_cents INTEGER NOT NULL,
   ticket_type TEXT NOT NULL DEFAULT 'standard' CHECK (ticket_type IN ('standard','vip','platinum','accessible','standing')),
   dyn_min_cents INTEGER,
-  dyn_max_cents INTEGER
+  dyn_max_cents INTEGER,
+  event_ids TEXT -- bundle level: JSON array of event ids; holding a seat holds the same seat in each
 );
 
 CREATE INDEX IF NOT EXISTS price_levels_event ON price_levels(event_id);
@@ -224,3 +225,35 @@ CREATE TABLE IF NOT EXISTS notifications (
   link TEXT,
   read_at TEXT
 );
+
+-- Inventory: one row per sellable unit. Reserved seat = 1 row; GA area = 1 row per capacity slot (seat_id NULL).
+-- Expiry is lazy: status='held' AND held_until < now means available again.
+CREATE TABLE IF NOT EXISTS holds (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  session_token TEXT NOT NULL,
+  user_id INTEGER REFERENCES users(id),
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','converted','released'))
+);
+CREATE INDEX IF NOT EXISTS holds_session ON holds(session_token, event_id);
+
+CREATE TABLE IF NOT EXISTS inventory (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  section_id INTEGER NOT NULL REFERENCES sections(id),
+  seat_id INTEGER REFERENCES seats(id),
+  slot INTEGER,
+  price_level_id INTEGER NOT NULL REFERENCES price_levels(id),
+  status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available','held','sold','blocked')),
+  block_kind TEXT CHECK (block_kind IN ('kill','comp','artist','promoter','production')),
+  hold_id INTEGER REFERENCES holds(id),
+  held_until TEXT,
+  window_id INTEGER,
+  UNIQUE(event_id, seat_id),
+  UNIQUE(event_id, section_id, slot)
+);
+CREATE INDEX IF NOT EXISTS inventory_status ON inventory(event_id, status);
+CREATE INDEX IF NOT EXISTS inventory_hold ON inventory(hold_id);

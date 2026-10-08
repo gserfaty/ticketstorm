@@ -148,12 +148,13 @@ export function getEvent(slug: string) {
   return { ...e, lineup, levels }
 }
 
-// Badge shown on cards and the event page. "Sold out" arrives with inventory in P3.
-export function eventState(e: { status: string; starts_at: string; onsale_at: string | null }, now = Date.now()) {
+// Badge shown on cards and the event page. Pass soldOut (see isSoldOut) where it is cheap to know.
+export function eventState(e: { status: string; starts_at: string; onsale_at: string | null }, now = Date.now(), soldOut = false) {
   if (e.status === 'cancelled') return { label: 'Cancelled', canBuy: false }
   if (e.status === 'postponed') return { label: 'Postponed', canBuy: false }
   if (Date.parse(e.starts_at) < now) return { label: 'Ended', canBuy: false }
   if (e.onsale_at && Date.parse(e.onsale_at) > now) return { label: 'Upcoming', canBuy: false }
+  if (soldOut) return { label: 'Sold out', canBuy: false }
   return { label: e.status === 'rescheduled' ? 'Rescheduled' : 'On sale', canBuy: true }
 }
 

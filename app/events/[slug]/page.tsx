@@ -1,12 +1,13 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { eventState, getEvent } from '../../../lib/events.ts'
+import { isSoldOut } from '../../../lib/inventory.ts'
 import { fmtDateTime, fmtDateTimeTz, money } from '../../../lib/format.ts'
 
 export default async function EventPage({ params }: { params: Promise<{ slug: string }> }) {
   const e = getEvent((await params).slug)
   if (!e) notFound()
-  const s = eventState(e!)
+  const s = eventState(e!, Date.now(), isSoldOut(e!.id))
   const { levels } = e!
   const max = Math.min(e!.ticket_limit, 8)
   const notOnSale = e!.status === 'published' || e!.status === 'rescheduled' ? e!.onsale_at && Date.parse(e!.onsale_at) > Date.now() : false
@@ -34,6 +35,8 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
         </form>
       ) : notOnSale ? (
         <p><strong>On sale {fmtDateTime(e!.onsale_at!, e!.tz)}</strong></p>
+      ) : s.label === 'Sold out' ? (
+        <p><strong>Sold out.</strong></p>
       ) : (
         <p className="muted">Tickets are not available for this event.</p>
       )}

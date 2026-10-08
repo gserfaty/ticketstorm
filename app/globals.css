@@ -25,3 +25,27 @@ pre { white-space:pre-wrap; word-break:break-word; margin:0 }
 .hero a { color:#fff } .hero .muted { color:#dde }
 .hero-img { max-width:100%; border-radius:8px }
 .buy { display:flex; gap:.75rem; align-items:center }
+.seatmap { max-width:100% }
+.map-controls { display:flex; gap:.5rem 1rem; align-items:center; flex-wrap:wrap; margin:.5rem 0 }
+.map-wrap { position:relative; background:#0b0c1a; border-radius:8px; overflow:hidden }
+.map-wrap svg { display:block; width:100%; height:auto; max-height:70vh; user-select:none }
+.map-wrap .stage { fill:var(--muted); font-size:14px; letter-spacing:.2em }
+.sec { cursor:pointer } .sec:hover path { stroke:#fff }
+.seclabel { fill:#fff; font-size:16px; pointer-events:none }
+.seat { cursor:pointer } .seat circle { stroke:#0b0c1a; stroke-width:.5 }
+.seat.ada circle { stroke:#fff; stroke-width:1.5 }
+.seat.st-h circle, .legend .st-h { fill:#6b7280; background:#6b7280 }
+.seat.st-s circle, .legend .st-s { fill:#2a2d45; background:#2a2d45 }
+.seat.st-b circle, .legend .st-b { fill:#111; background:#111; stroke:var(--bad) }
+.seat.st-sel circle, .legend .st-sel { fill:#fff; background:#fff }
+.seat.st-mine circle, .legend .st-mine { fill:var(--ok); background:var(--ok) }
+.seat.st-h, .seat.st-s, .seat.st-b { cursor:not-allowed }
+.zoom { position:absolute; top:.5rem; right:.5rem; display:flex; flex-direction:column; gap:.25rem }
+.zoom button { width:2.25rem; height:2.25rem; padding:0 }
+.tip { position:absolute; z-index:3; pointer-events:none; background:var(--panel); border:1px solid #445; border-radius:6px; padding:.25rem .5rem; font-size:.8rem; max-width:240px }
+.legend { display:flex; flex-wrap:wrap; gap:.25rem 1rem; list-style:none; padding:0; font-size:.85rem }
+.legend i { display:inline-block; width:.8rem; height:.8rem; border-radius:50%; vertical-align:middle; border:1px solid #556 }
+.legend .st-resale { border:2px dashed var(--muted); background:none }
+.holdbar { border:1px solid var(--ok) }
+.card ul { padding-left:1.25rem }
+@media (max-width:600px) { main { padding:.5rem } .map-controls label, .map-controls select { flex:1 1 40% } }
