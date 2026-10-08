@@ -9,6 +9,9 @@ import { refundEvent, sendConfirmation } from '../../lib/orders.ts'
 import { compTickets, moveSeat, ORDER_ROLES, refundFromForm } from '../../lib/orderadmin.ts'
 import * as org from '../../lib/organizer.ts'
 import { audit, UserError } from '../../lib/platform.ts'
+import { sendCampaign } from '../../lib/campaign.ts'
+import { requestPayout } from '../../lib/payouts.ts'
+import { settleEvent } from '../../lib/reports.ts'
 import { setResaleRule, setTransferRule } from '../../lib/rules.ts'
 import { requireOrgRole, requireUser } from '../../lib/session.ts'
 
@@ -34,7 +37,7 @@ async function authEvent(f: FormData, roles = MANAGE) {
     | undefined
   if (!e) notFound()
   const { user } = await requireOrgRole(e!.org_id, roles)
-  const sub = ['pricing', 'inventory', 'access', 'queue', 'orders'].includes(text(f, 'page')) ? `/${text(f, 'page')}` : ''
+  const sub = ['pricing', 'inventory', 'access', 'queue', 'orders', 'marketing', 'reports'].includes(text(f, 'page')) ? `/${text(f, 'page')}` : ''
   return { ...e!, user, back: `/organizer/${e!.org_id}/events/${e!.id}${sub}` }
 }
 
@@ -156,6 +159,37 @@ export async function saveResaleRuleAction(f: FormData) {
     setResaleRule(e.id, { enabled: f.get('enabled'), min_pct: f.get('min_pct'), max_pct: f.get('max_pct'), seller_fee_pct: f.get('seller_fee_pct'), buyer_fee_pct: f.get('buyer_fee_pct') }, inherit)
     audit(e.user.id, 'rules.resale', `event:${e.id}`, { inherit, min: text(f, 'min_pct'), max: text(f, 'max_pct'), seller: text(f, 'seller_fee_pct'), buyer: text(f, 'buyer_fee_pct'), enabled: f.get('enabled') === 'on' })
   })
+}
+
+// Marketing email to the event's opted-in fan list (followers + buyers). Audited with the counts.
+export async function sendCampaignAction(f: FormData) {
+  const e = await authEvent(f)
+  let r = { sent: 0, skipped: 0 }
+  run(e.back, () => {
+    r = sendCampaign(e.id, text(f, 'subject'), String(f.get('body') ?? ''))
+    audit(e.user.id, 'campaign.send', `event:${e.id}`, { subject: text(f, 'subject').slice(0, 120), ...r })
+  }, 'Campaign sent')
+}
+
+// Settlement and org payouts: owners and finance only. The org comes from the event / the form's org, proven by requireOrgRole.
+export async function settleEventAction(f: FormData) {
+  const e = await authEvent(f, org.FINANCE_ROLES)
+  const back = `/organizer/${e.org_id}/payouts`
+  run(back, () => {
+    const r = settleEvent(e.id, e.user.id)
+    audit(e.user.id, 'settlement.run', `event:${e.id}`, r)
+    if (!r.settled) throw new UserError('This event was already settled')
+  }, 'Event settled into your organization balance')
+}
+
+export async function orgPayoutAction(f: FormData) {
+  const orgId = num(f, 'orgId')
+  const { user } = await requireOrgRole(orgId, org.FINANCE_ROLES)
+  run(`/organizer/${orgId}/payouts`, () => {
+    const m = /^(\d{1,8})(\.\d{1,2})?$/.exec(text(f, 'amount'))
+    const id = requestPayout(`org:${orgId}`, user.id, m ? Math.round(Number(text(f, 'amount')) * 100) : 0)
+    audit(user.id, 'payout.request', `org:${orgId}`, { payoutId: id, amount: text(f, 'amount') })
+  }, 'Payout requested. An admin will review it.')
 }
 
 // Promo codes: org_id comes from the event row, so a manager can only create and delete codes for their own org.

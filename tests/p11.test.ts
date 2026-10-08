@@ -15,6 +15,8 @@ const { createTransfer, acceptTransfer, expireTransfers } = await import('../lib
 const { setResaleRule, setTransferRule } = await import('../lib/rules.ts')
 const { balance, ledgerTotal } = await import('../lib/ledger.ts')
 const { requestPayout, decidePayout } = await import('../lib/payouts.ts')
+const { csvCell, reportCsv, settleEvent, eventReport } = await import('../lib/reports.ts')
+const { sendCampaign } = await import('../lib/campaign.ts')
 test.after(() => rmSync(dir, { recursive: true, force: true }))
 
 const run = (sql: string, ...a: (string | number | null)[]) => Number(db.prepare(sql).run(...a).lastInsertRowid)
@@ -144,4 +146,81 @@ test('listings expire at event start: job sets expired and the ticket is valid a
   assert.equal(expireListings(), 1)
   assert.equal(get<{ status: string }>('SELECT status FROM listings WHERE id = ?', lid).status, 'expired')
   assert.equal(get<{ status: string }>('SELECT status FROM tickets WHERE id = ?', t).status, 'valid')
+})
+
+test('CSV cells are escaped and formulas neutralised', () => {
+  assert.equal(csvCell('=HYPERLINK("x")'), `"'=HYPERLINK(""x"")"`)
+  assert.equal(csvCell('+1'), "'+1")
+  assert.equal(csvCell('-cmd'), "'-cmd")
+  assert.equal(csvCell('@SUM(A1)'), "'@SUM(A1)")
+  assert.equal(csvCell('a,b'), '"a,b"')
+  assert.equal(csvCell('line\nbreak'), '"line\nbreak"')
+  assert.equal(csvCell(-500), '-500') // numbers are not prefixed
+  assert.equal(csvCell(null), '')
+})
+
+test('report CSV totals match select sum(total); src shows in the marketing report; settlement is idempotent and zero-sum', () => {
+  const e4 = mkEvent('e4', 5 * 864e5)
+  const sess = (u: number, src?: string) => {
+    const session = `s${++n}`
+    const h = inv.holdBestAvailable(e4, { sessionToken: session, userId: u }, 2)
+    const r = finalize({ holdId: h.holdId, sessionToken: session, userId: u, email: `=evil${u}@x.test`, key: `key-${n}-padding`, method: 'card', brand: 'Visa', last4: '4242', exp: '12/39', save: false, billing: { name: 'A', address: 'a', city: 'c', zip: '1' }, src })
+    assert.ok('orderId' in r)
+  }
+  sess(alice, 'newsletter')
+  sess(bob, 'Not A Slug!') // invalid slug is dropped
+  sess(alice)
+  const csv = reportCsv(e4)
+  const lines = csv.trim().split('\r\n')
+  assert.equal(lines.length, 1 + 3 + 1)
+  const total = Number(lines.at(-1)!.split(',')[9])
+  assert.equal(total, get<{ s: number }>("SELECT sum(total) AS s FROM orders WHERE event_id = ?", e4).s)
+  assert.ok(lines[1].includes("\"'=evil") || lines[1].includes("'=evil")) // email starting with = is prefixed
+  const rep = eventReport(e4, 'UTC')
+  assert.equal(rep.gross, total)
+  assert.deepEqual(rep.bySrc.map((s) => [s.src, s.orders]).sort(), [['direct', 2], ['newsletter', 1]])
+  assert.equal(rep.byLevel.reduce((a, l) => a + l.sold, 0), 6)
+  // not over yet
+  assert.throws(() => settleEvent(e4, admin), /not over/)
+  db.prepare('UPDATE events SET starts_at = ? WHERE id = ?').run(new Date(Date.now() - 864e5).toISOString(), e4)
+  const before = ledgerTotal()
+  const first = settleEvent(e4, admin)
+  assert.equal(first.settled, true)
+  assert.equal(first.net, rep.net)
+  assert.equal(balance(`org:${org}`), rep.net)
+  const second = settleEvent(e4, admin)
+  assert.equal(second.settled, false)
+  assert.equal(balance(`org:${org}`), rep.net) // credited once
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM ledger WHERE ref = ?", `settle:event:${e4}`).n >= 3, true)
+  assert.equal(ledgerTotal(), before)
+  assert.equal(ledgerTotal(), 0)
+  // the org can request a payout of it
+  requestPayout(`org:${org}`, alice, rep.net)
+  assert.equal(balance(`org:${org}`), 0)
+})
+
+test('settlement waits for orders in review', () => {
+  const e5 = mkEvent('e5', 5 * 864e5)
+  const [t] = buy(alice, e5)
+  db.prepare("UPDATE orders SET status = 'review' WHERE id = (SELECT order_id FROM tickets WHERE id = ?)").run(t)
+  db.prepare('UPDATE events SET starts_at = ? WHERE id = ?').run(new Date(Date.now() - 864e5).toISOString(), e5)
+  assert.throws(() => settleEvent(e5, admin), /Resolve 1/)
+})
+
+test('campaign goes only to opted-in fans, with an unsubscribe footer, and is rate limited', () => {
+  const e6 = mkEvent('e6', 5 * 864e5)
+  const carol = user('carol')
+  buy(alice, e6)
+  buy(bob, e6)
+  db.prepare("UPDATE users SET notif_prefs = '{\"marketing_email\":true}' WHERE id = ?").run(alice) // only alice opted in
+  const r = sendCampaign(e6, 'Hello', 'Doors at 7')
+  assert.deepEqual(r, { sent: 1, skipped: 1 })
+  const mail = get<{ to: string; body: string }>("SELECT \"to\", body FROM outbox WHERE subject = 'Hello'")
+  assert.equal(mail.to, 'alice@x.test')
+  assert.match(mail.body, /Unsubscribe from these emails: .*\/unsubscribe\?t=/)
+  assert.ok(carol)
+  sendCampaign(e6, 'Two', 'x')
+  sendCampaign(e6, 'Three', 'x')
+  assert.throws(() => sendCampaign(e6, 'Four', 'x'), /per event per day/)
+  assert.throws(() => sendCampaign(e6, '', 'x'), /Subject/)
 })

@@ -13,6 +13,8 @@ import type { GenSection, VenueKind } from './venue-gen.ts'
 
 export const MANAGE_ROLES = ['owner', 'manager']
 export const SCAN_ROLES = ['owner', 'manager', 'box_office', 'scanner']
+export const REPORT_ROLES = ['owner', 'manager', 'finance']
+export const FINANCE_ROLES = ['owner', 'finance']
 export const ALL_ROLES = ['owner', 'manager', 'box_office', 'scanner', 'finance']
 export const BLOCK_KINDS = ['kill', 'comp', 'artist', 'promoter', 'production']
 const TYPES = ['standard', 'vip', 'platinum', 'accessible', 'standing']

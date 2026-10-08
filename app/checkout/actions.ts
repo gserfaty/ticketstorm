@@ -1,6 +1,6 @@
 'use server'
 
-import { headers } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { db } from '../../lib/db.ts'
 import { allowed, checkCaptcha, clientIp, isBlocked, newCaptcha } from '../../lib/defense.ts'
@@ -76,7 +76,7 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
 
   let r
   try {
-    r = finalize({ holdId, sessionToken: session.token, userId: user?.id ?? null, email, key, method, installments: f.get('installments') === 'on', brand, last4, exp, save: !!user && f.get('save') === 'on' && method === 'card', billing })
+    r = finalize({ holdId, sessionToken: session.token, userId: user?.id ?? null, email, key, method, installments: f.get('installments') === 'on', brand, last4, exp, save: !!user && f.get('save') === 'on' && method === 'card', billing, src: (await cookies()).get('src')?.value })
   } catch (e) {
     if (e instanceof HoldError) return e.status === 410 ? back(holdId, e.message) : bad(e.message)
     throw e

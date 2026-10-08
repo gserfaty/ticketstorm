@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation'
 import Flash from '../../../components/Flash.tsx'
 import { db } from '../../../lib/db.ts'
 import { fmtDateTime } from '../../../lib/format.ts'
-import { ALL_ROLES, MANAGE_ROLES, SCAN_ROLES } from '../../../lib/organizer.ts'
+import { ALL_ROLES, FINANCE_ROLES, MANAGE_ROLES, SCAN_ROLES } from '../../../lib/organizer.ts'
 import { requireOrgRole } from '../../../lib/session.ts'
 import { createVenueAction } from '../actions.ts'
 
@@ -28,6 +28,7 @@ export default async function OrgHome({ params, searchParams }: { params: Promis
       {org!.status !== 'approved' && <p className="muted">Pending admin approval: you can prepare drafts but not publish.</p>}
       <p>
         {manage && <><Link href={`/organizer/${orgId}/events/new`}>New event</Link> · <Link href={`/organizer/${orgId}/members`}>Members</Link></>}
+        {FINANCE_ROLES.includes(role) && <>{manage ? ' · ' : ''}<Link href={`/organizer/${orgId}/payouts`}>Payouts and settlement</Link></>}
       </p>
       <h2>Events</h2>
       {events.map((e) => (
