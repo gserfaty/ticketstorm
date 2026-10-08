@@ -22,6 +22,45 @@ All notable changes, newest first. Format follows [Keep a Changelog](https://kee
 
 ---
 
+## P8: Pricing, ticket types, add-ons, inventory rules
+
+### b3cd498 (2026-10-08) P8: pricing, ticket types, add-ons, inventory rules
+
+#### Added
+- **Orphan-seat rule** (`orphanSeat`, `assertNoOrphans` in `lib/inventory.ts`): a selection may not leave exactly one empty seat between taken seats or between a taken seat and the row edge (an aisle gap in the numbering counts as an edge). One pure function, used by manual selection (`holdSeats`) and by Best Available (which now slides a window over each run of adjacent seats and takes the first window that passes). Held (by anyone else), sold, blocked and presale-hidden seats count as taken; the caller's own previous hold does not (it is released first). The error names the seat: "Seat 2 in Section 202 Row E would be left empty on its own...". Single seats that were already stranded and are not next to the selection are left alone. GA is exempt.
+- **Ticket limits**: `events.order_limit` (per order; NULL = same as `ticket_limit`) next to the existing `ticket_limit`, which is now documented as the per-event, per-account cap and is not duplicated: `assertTicketLimit` (paid orders by user or same email, plus live holds in other sessions) still enforces it at hold time and again in `finalize`. Organizer form on the pricing page; event page, tickets page and seat map use `orderLimit()`.
+- **Dynamic / Platinum pricing**: `price_levels.dyn_min_cents`, `dyn_max_cents`, `dyn_k`, `dyn_j`; `dynamicPrice` = `clamp(base x (1 + k x sold% + j x queue factor), min, max)`, recomputed per display and per new hold. sold% is sold / non-blocked units of the event; the queue factor is people still waiting in the waiting room over 100, capped at 1. Organizer UI per level (min, max, k, j).
+- **Locked face price**: `inventory.locked_cents` is written for every row in the same transaction that holds it (`lockPrices`). `quote()` reads it (never the live level price), so the price shown at checkout is the price charged, whatever demand does afterwards. Re-pricing a level is still refused while its seats are held or sold.
+- **Fee rules**: `feeRule` precedence is built-in defaults, then platform defaults (`settings.fee_defaults`), then the event's `fee_rule`, field by field. New `delivery_cents` (per order, folded into the order fee line). Admin pages `/admin/fees` and `/admin/taxes` (per-city `tax_rate_bps`), admin-only, validated, each change written to `audit_log` (`fees.defaults`, `tax.set`).
+- **All-in pricing toggle**: header button sets the `allin` cookie (`toggleAllIn`, `allInOn()` in `lib/session.ts`). One helper, `shown()` / `displayLevels()` / `displayRange()` in `lib/pricing.ts`, feeds event cards, the event page range and level list, the seat map (legend, tooltips, list view, totals, slider) and resale prices; checkout shows each ticket as `face + fees + tax = all-in`. Because it calls the same `price()` as `quote()`, the displayed all-in amounts add up to the checkout total (plus the single order fee).
+- **Promo codes** (`promo_codes`): percent or fixed, `max_uses`, optional expiry, platform-wide, per organization, or per event. Entered at checkout, validated server side (`findPromo`), stored on the hold with the other checkout options. `createOrder` takes the use with `UPDATE promo_codes SET uses = uses + 1 WHERE id = ? AND uses < max_uses AND (not expired)` inside the order transaction, so concurrent buyers cannot exceed `max_uses` and a failed order consumes nothing. The discount never exceeds the ticket subtotal and is stored as an `order_items` row of kind `discount` (negative), so `sum(items) == orders.total` still holds. Organizer UI is org-scoped (the org is read from the event row).
+- **Offers** (child, senior, student percent off per ticket, chosen per ticket at checkout; `order_items.offer_id`), set by the organizer; fees and tax follow the discounted face.
+- **VIP / Meet & Greet packages** and **standing-room levels**: `price_levels.perks` text shown on the event page, legend tooltip and organizer page; the seed has a Platinum level, a Meet & Greet package and Standing levels.
+- **Add-ons** (`addons`: parking, merch, hospitality): chosen at checkout, stored on the hold. `createOrder` runs `UPDATE addons SET sold = sold + ? WHERE id = ? AND sold + ? <= inventory` per add-on inside the order transaction; a miss rolls the whole order back, charge included ("Lot A parking is sold out"). Each parking or hospitality unit also gets a pass: a `tickets` row with `inventory_id` NULL and `addon_id` set, with its own secret and SafeTix QR. It appears on the order page and in My tickets, and the scanner accepts it ("Valid · Lot A parking").
+- **List view** beside the seat map, sortable by lowest price or best seats (section rank), respecting the price slider.
+- **Checkout** gets an "Update order" form (promo code, per-ticket offer, add-on quantities) above the payment form.
+- Organizer pricing page sections: dynamic pricing per level, ticket limits, delivery fee, offers, add-ons, promo codes.
+- Tests: `tests/pricing.test.ts` (fee/tax math, dynamic clamp, platinum lock, admin fee and tax changes, all-in consistency, promo limits and caps, offers, add-on oversell and passes, limits across orders), `tests/orphan.test.ts` (pure rule, manual, edge, taken states, Best Available), and a 3DS + promo + add-on case in `tests/payments.test.ts`.
+- Seed: Platinum level (k 3, j 0.5, $250 to $900) and add-ons on `neon-harbor-empire-saturday` (Lot A parking with **inventory 1**, tour T-shirt, club lounge), Meet & Greet package on `neon-harbor-megatour` (order limit 4, event limit 6), child/senior/student offers on every event, promo codes `STORM10` (10 percent, platform-wide) and `FIVEOFF` ($5, Saturday show only).
+- Schema: `addons`, `promo_codes`, `events.order_limit`, `price_levels.dyn_k/dyn_j/perks`, `inventory.locked_cents`, `holds.options`, `order_items.kind = 'discount'`, `tickets.addon_id` (and `tickets.inventory_id` nullable, with a CHECK that exactly one of them is set), unique `(event_id, name)` on `offers`.
+
+#### Changed
+- `quote()` now returns `addons`, `discount`, `promo` / `promoError` and per-line `base` / `offerId`; `orders.subtotal` is tickets plus add-ons and `total = subtotal + fees + tax - discount`. A promo that stops being valid blocks payment with a clear message instead of silently changing the total.
+- `FeeRule` gained optional `delivery_cents`; `EventRow` no longer carries `min_cents` / `max_cents` (cards use `displayRange`).
+- `place()` error for oversized orders is now "Choose 1 to N tickets per order".
+- `getTicket`, `scanTicket`, My tickets and the order page handle tickets without a seat (LEFT JOIN on `inventory` and `addons`). Transfers and resale still refuse passes (`assertTradable` joins `inventory`).
+- `tests/holds.test.ts`: one replace-own-hold step now picks seats that satisfy the orphan rule.
+
+#### Fixed
+- An unlocked presale could only be reached by typing the tickets URL. The event page now shows a "Find presale tickets" button (and the public on-sale date) to a session that has unlocked an open window before the public on-sale.
+
+#### Known limitations
+- Tax is charged on tickets only; add-ons carry no fee or tax. Fees and tax are computed on the pre-discount face (the promo comes off the total).
+- Displayed prices on an open seat map do not refresh dynamic prices until reload; the hold locks the real price and checkout shows it.
+- Offers are not locked at hold time (only face price is); promo and offer choices live on the hold and are cleared when the shopper replaces the hold.
+
+---
+
 ## P7: Waiting room, bot defense, presales and Verified Fan
 
 ### 8cccfa2 (2026-10-07) P7: waiting room, bot defense, presales and Verified Fan

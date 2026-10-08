@@ -1,6 +1,6 @@
 # TicketStorm architecture
 
-Status: P1 to P7 of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
+Status: P1 to P8 of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
 
 ## Stack and why
 
@@ -21,13 +21,13 @@ Conventions: money is integer cents; times are UTC ISO strings and venues carry 
 app/            routes (server components), server actions (actions.ts files), route handlers (route.ts)
   api/          events/[id]/inventory, holds, holds/[id], queue/[eventId], scan, suggest
   organizer/    org-scoped tools; guard.ts loads an event and checks the viewer against ITS org
-  admin/ scan/ checkout/ orders/ tickets/ transfers/ sell/ listings/ favorites/ queue/ access/ dev/outbox
+  admin/ (users, orgs, events, refunds, flags, fees, taxes) scan/ checkout/ orders/ tickets/ transfers/ sell/ listings/ favorites/ queue/ access/ dev/outbox
 components/     client components: SeatMap, TicketQR, PayForm, QueueRoom, Scanner, Countdown, ...
 lib/            all business logic; no React
   schema.sql    the one idempotent schema, applied on every DB open
   db.ts         connection + tx()
   inventory.ts  holds        orders.ts  finalize, refunds, authorization
-  payments.ts   fake gateway pricing.ts quotes    safetix.ts  rotating tokens
+  payments.ts   fake gateway pricing.ts quotes, fees, dynamic prices, display, promos    safetix.ts  rotating tokens
   transfers.ts resale.ts ledger.ts    scan.ts organizer.ts platform.ts
   queue.ts access.ts defense.ts       session.ts auth.ts jobs.ts notify.ts events.ts geo.ts format.ts venue-gen.ts
 scripts/        seed.ts, jobs.ts
@@ -77,13 +77,13 @@ Defined in `lib/schema.sql` (`CREATE ... IF NOT EXISTS`, applied on every open; 
 
 **Places and people**: `cities` (tax rate in bps), `orgs` (`pending|approved|suspended`), `org_members` (PK `(org_id, user_id)`, roles owner, manager, box_office, scanner, finance), `venues` (org-owned, `tz`), `sections` (`reserved|ga`, SVG path), `seats` (UNIQUE `(section_id,row,number)`; accessible, companion, obstructed flags), `artists`, `artist_related`.
 
-**Events**: `events` (status `draft|published|cancelled|postponed|rescheduled`, `onsale_at`, `hold_minutes`, `ticket_limit`, queue settings, JSON `fee_rule`, `approved`), `event_artists`, `price_levels` (`event_ids` JSON marks a bundle level), `offers` (schema only).
+**Events**: `events` (status `draft|published|cancelled|postponed|rescheduled`, `onsale_at`, `hold_minutes`, `ticket_limit`, queue settings, JSON `fee_rule`, `approved`), `event_artists`, `price_levels` (`event_ids` JSON marks a bundle level; `dyn_min_cents`, `dyn_max_cents`, `dyn_k`, `dyn_j` make it dynamic; `perks` text), `offers` (child/senior/student percent, UNIQUE per event), `addons` (kind, price, `inventory`, `sold`, `CHECK sold <= inventory`), `promo_codes` (`org_id` NULL = platform-wide, `event_id` NULL = all events of the org; `CHECK uses <= max_uses`). `events.ticket_limit` is the per-event, per-account cap and `events.order_limit` (NULL = same) the per-order cap.
 
-**Inventory and holds**: one `inventory` row per sellable unit. A reserved seat is one row (`seat_id` set); a GA area is one row per capacity slot (`seat_id` NULL, `slot` set). Status `available|held|sold|blocked`, `block_kind`, `hold_id`, `held_until`, `window_id` (presale window the unit is held back for). UNIQUE `(event_id, seat_id)` and `(event_id, section_id, slot)`. `holds` has `session_token`, `status active|converted|released`.
+**Inventory and holds**: one `inventory` row per sellable unit. A reserved seat is one row (`seat_id` set); a GA area is one row per capacity slot (`seat_id` NULL, `slot` set). Status `available|held|sold|blocked`, `block_kind`, `hold_id`, `held_until`, `window_id` (presale window the unit is held back for). UNIQUE `(event_id, seat_id)` and `(event_id, section_id, slot)`. `holds` has `session_token`, `status active|converted|released` and `options` (JSON checkout choices: promo code, offer per inventory id, add-on quantities). `inventory.locked_cents` is the unit face price fixed when the row was held.
 
-**Orders and tickets**: `orders` (`hold_id` is UNIQUE: one order per hold; `idempotency_key` UNIQUE; `access_token` for guest links; `refund_error`), `order_items` (kind `ticket|addon|protection|giftcard|fee`; the per-order processing fee is its own `fee` row so item sums equal the total), `tickets` (status `valid|used|transferred|listed|resold|cancelled|expired`, per-ticket `secret`), `payments` (kind charge/refund/payout, `idempotency_key` UNIQUE, `meta` JSON with contact and billing, never card number or CVC), `saved_cards` (brand, last4, exp, fake token).
+**Orders and tickets**: `orders` (`hold_id` is UNIQUE: one order per hold; `idempotency_key` UNIQUE; `access_token` for guest links; `refund_error`), `order_items` (kind `ticket|addon|protection|giftcard|fee|discount`; the per-order fee is its own `fee` row, a promo is a negative `discount` row, add-ons one row per unit, so item sums equal the total), `tickets` (status `valid|used|transferred|listed|resold|cancelled|expired`, per-ticket `secret`; either `inventory_id` for a seat or `addon_id` for an add-on pass, enforced by a CHECK), `payments` (kind charge/refund/payout, `idempotency_key` UNIQUE, `meta` JSON with contact and billing, never card number or CVC), `saved_cards` (brand, last4, exp, fake token).
 
-Key constraint: `one_live_ticket` is `UNIQUE ON tickets(inventory_id) WHERE status IN ('valid','listed','used')`. Even if application logic failed, two live tickets cannot exist for one seat.
+Key constraint: `one_live_ticket` is `UNIQUE ON tickets(inventory_id) WHERE status IN ('valid','listed','used')`. Even if application logic failed, two live tickets cannot exist for one seat. Add-on passes have a NULL `inventory_id`, which a unique index ignores, so any number of passes can exist.
 
 **Fan to fan**: `transfers` (partial unique `one_pending_transfer` on `ticket_id` where `pending`; random 128-bit `claim_token`), `listings` (partial unique `one_active_listing` on `ticket_id` where `active`; `hold_id` + `held_until` reserve a listing for one buyer), `ledger` (append-only; account `user:ID|org:ID|platform`), `favorites`.
 
@@ -98,9 +98,9 @@ Key constraint: `one_live_ticket` is `UNIQUE ON tickets(inventory_id) WHERE stat
 Every hold path (specific seats, best available, GA, bundle) funnels through `place()` in `lib/inventory.ts`:
 
 1. `tx()` opens `BEGIN IMMEDIATE`, so the writer lock is taken before any read.
-2. Inside the same transaction it checks: event exists and is not a draft; the session is admitted by the waiting room (`admittedNow`); the event is buyable (`eventState`); quantity is within `ticket_limit`; the per-account ticket limit (`assertTicketLimit`).
+2. Inside the same transaction it checks: event exists and is not a draft; the session is admitted by the waiting room (`admittedNow`); the event is buyable (`eventState`); quantity is within the per-order limit (`orderLimit`); the per-event, per-account ticket limit (`assertTicketLimit`).
 3. It frees any live hold the same session already has for the event (one hold per session per event, so stacking holds cannot dodge the limit).
-4. A `pick` callback chooses candidate inventory ids in the same transaction (for best available it scans a joined, ordered result for the first run of adjacent seats in one row; ADA seats are kept for accessible requests; bundle seats are skipped unless a level is named).
+4. A `pick` callback chooses candidate inventory ids in the same transaction. Manual selection runs the orphan-seat rule; best available slides a window over each run of adjacent seats in one row (best section rank first) and takes the first window that passes the same rule; ADA seats are kept for accessible requests; bundle seats are skipped unless a level is named.
 5. Bundle levels add the same seat in every other event of the bundle, each of which must be on sale.
 6. One conditional UPDATE claims everything:
 
@@ -111,12 +111,28 @@ WHERE event_id IN (...) AND id IN (...) AND (window_id IS NULL OR window_id IN (
 ```
 
 7. `changes !== ids.length` throws, which rolls the whole transaction back (all or nothing).
+8. `lockPrices` writes `inventory.locked_cents` for every claimed row (the dynamic price at that instant) in the same transaction.
 
 Expiry is **lazy**: a held row whose `held_until` is in the past is simply claimable again; the predicate above and every read query fold the clock in. The `runJobs()` sweep only tidies rows. Release (`releaseHold`) is owner-only by session token.
 
+### Orphan-seat rule
+
+`orphanSeat(row, picked)` in `lib/inventory.ts` is pure: given every seat of a row (free or not) and the numbers being chosen, it returns a free seat that would be left with no free neighbour while sitting next to a chosen seat, or nothing. A gap in the numbering and the row ends count as walls; held (by others), sold, blocked and presale-hidden seats are not free; the caller's old hold is released before the check. Manual selection calls `assertNoOrphans` (loads the whole rows of the chosen seats and throws a `HoldError` naming the seat). Best Available calls `orphanSeat` for every candidate window against the same physical row data. Pre-existing single seats that are not adjacent to the selection are ignored, otherwise nobody could ever buy next to them. Everything runs inside `place()`'s transaction, so the check and the claim see one consistent state.
+
+### Pricing pipeline
+
+1. **Level price**: `dynamicPrice(level, demand)` = `clamp(base x (1 + k x sold% + j x queueFactor), min, max)`; `demand()` reads sold share of the event and the waiting-room depth. Fixed levels (k = j = 0) return the base.
+2. **Lock**: `lockPrices` stores the result in `inventory.locked_cents` when the seats are held. `quote()` reads only that column (falling back to the level price for rows without one), so changing k, min, max or demand never changes an open hold, and `finalize` charges exactly what the shopper saw.
+3. **Offers** reduce the locked face per ticket (percent from `offers`), chosen at checkout and stored in `holds.options`.
+4. **Fees and tax** (`price()`, pure): per ticket `service_pct` of face plus `facility_cents`, tax (city `tax_rate_bps`) on face plus those fees, plus one untaxed per-order fee (`order_cents + delivery_cents`). The rule is built-in defaults, then `settings.fee_defaults` (`/admin/fees`), then the event's `fee_rule`, merged per field on every quote, so an admin change shows up in the next quote.
+5. **Add-ons** add `qty x price` to the subtotal (no fee, no tax). **Promo**: `findPromo` validates code, scope, expiry and uses; the discount is `min(code value, ticket subtotal)` and is subtracted from the total.
+6. `total = subtotal + fees + tax - discount`. Display uses the same `price()`: `shown(cents, ctx, allIn)` adds the ticket's own fees and tax when the `allin` cookie is set, and every page that shows a price goes through `displayLevels` / `displayRange` / `shown`, so listings never disagree with checkout.
+
+`quote()` is pure with respect to the hold: it reads locked prices and `holds.options`, so `finalize`, the 3DS approval and the checkout page produce the same answer unless the shopper changes options (then the amounts differ and the 3DS approval is refused with "Price changed").
+
 ### Finalize transaction
 
-`finalize()` in `lib/orders.ts` runs in one `tx()`: look up the idempotency key (repeat returns the first result), verify the hold is live and belongs to the session token, quote, re-check the ticket limit (paid tickets for the event on the user's orders **or on any order with the same email, case-insensitive**, so logging out and buying as a guest does not reset it), record the charge. On success `createOrder` runs in the same transaction: mark inventory `sold` with `WHERE hold_id = ? AND status='held' AND held_until > now` and require the exact row count; insert order, ticket and fee items, tickets with fresh 32-byte secrets, link the payment, convert the hold, optionally save the card, queue the confirmation email. Any failure rolls everything back. A decline commits only its payment row. 3DS payments finalize later through `approve3ds`, which reuses `createOrder` (and flips the payment to `declined/hold_expired` if the hold died meanwhile). `recordCharge` also dedupes on the UNIQUE `idempotency_key`.
+`finalize()` in `lib/orders.ts` runs in one `tx()`: look up the idempotency key (repeat returns the first result), verify the hold is live and belongs to the session token, quote, re-check the ticket limit (paid tickets for the event on the user's orders **or on any order with the same email, case-insensitive**, so logging out and buying as a guest does not reset it), record the charge. On success `createOrder` runs in the same transaction: mark inventory `sold` with `WHERE hold_id = ? AND status='held' AND held_until > now` and require the exact row count; take the add-on units and the promo use with guarded UPDATEs (`sold + ? <= inventory`, `uses < max_uses`; a miss throws and rolls back the charge too), insert order, ticket / add-on / discount / fee items, tickets with fresh 32-byte secrets (plus a seat-less pass ticket for each parking or hospitality unit), link the payment, convert the hold, optionally save the card, queue the confirmation email. Any failure rolls everything back. A decline commits only its payment row. 3DS payments finalize later through `approve3ds`, which reuses `createOrder` (and flips the payment to `declined/hold_expired` if the hold died meanwhile). `recordCharge` also dedupes on the UNIQUE `idempotency_key`.
 
 ### Resale and the ticket state machine
 
@@ -149,6 +165,10 @@ A resold ticket exists on two orders (the original buyer's and the new buyer's) 
 
 Payments: client sends a form key (`[\w-]{8,64}`) generated per page render; `payments.idempotency_key` and `orders.idempotency_key` are UNIQUE. Double-submits return the first result and never charge twice; a declined attempt needs a new key. Other idempotent writes: `generateInventory` (`INSERT OR IGNORE`), `runJobs`, `refundEvent`, the lottery (claimed by setting `lottery_at` with a guarded UPDATE), waitlist promotion (`promoted_at`), and the single-use update patterns for verify/reset codes (`UPDATE ... WHERE used_at IS NULL RETURNING`).
 
+### Add-on passes
+
+A parking or hospitality unit is an `order_items` row of kind `addon` plus a `tickets` row with `inventory_id` NULL and `addon_id` set. It has its own secret, so it shows its own rotating SafeTix QR and verifies and scans exactly like a seat ticket (`scanTicket` resolves the event through `addons` when there is no inventory). Passes are excluded from attendance counts, transfers and resale (those join `inventory`). Merch has no pass. Cancelling the event cancels the pass with the order.
+
 ### SafeTix tokens
 
 `lib/safetix.ts`: token is `ticketId.window.HMAC-SHA256(secret, "ticketId:window")` with `window = floor(ms / 15000)`. The browser (`components/TicketQR.tsx`) computes the same value with `crypto.subtle`, so it rotates without a server round-trip. The server accepts the current window plus or minus one (clock skew) and compares with `timingSafeEqual`. A genuine HMAC outside the window is reported as `expired` (stale screenshot); anything else is `invalid`.
@@ -172,7 +192,7 @@ Payments: client sends a form key (`[\w-]{8,64}`) generated per page render; `pa
 - **Queue** (`lib/queue.ts`): `joinQueue` is idempotent per `(event, session)`. Before on-sale the rank is random (so arrival order does not matter); after on-sale it is a FIFO sequence. Admission is **lazy**: every poll or gate check runs `admit()` inside a transaction, admitting in rank order up to `min(rate x minutes since on-sale - already admitted, cap - live admitted)`. An admission lasts 10 minutes (`ADMIT_MINUTES`); an expired admission is dropped and re-joining goes to the back. The clock is an injectable `now` parameter (tests use a fake clock). A logged-in user has one place per event: joining from another browser moves the existing entry to that session. The gate is **server-side**: `place()` and `holdListing` call `admittedNow`; a session with an unlocked, open presale window may hold that window's seats without admission (and before the public on-sale), but never public seats (`place()` passes `pub=false` to the visibility predicate). The tickets page applies the same rule, and the tickets page redirects to `/queue/<id>` unless admitted, so there is no client-only check. `QueueRoom` polls `GET /api/queue/<id>` every 5 seconds.
 - **Presale windows** (`lib/access.ts`): inventory rows held back by an organizer carry `window_id`. A session sees and can hold those rows only while the window is open and either needs no code or has an unlock row in `window_unlocks` (`openWindowIds`). Availability, best available, GA counts and the hold UPDATE all use the same visibility predicate. Entering a code increments `access_codes.uses` with `WHERE uses < max_uses`, so a code with N uses unlocks N sessions and never N+1; codes can be bound to a user (Verified Fan). `releaseEndedWindows` returns unsold (`status='available'`) presale seats to public sale; held seats keep their window until they free up and a later run releases them.
 - **Verified Fan**: `registerVf` inside the registration window; after `reg_ends`, `runLottery` (job) claims the window by setting `lottery_at`, shuffles registrations with `randomInt` (storing each position in `lottery_rank`), selects the first `vf_slots`, issues one-use user-bound codes (email, SMS, in-app) and waitlists the rest. After `vf_buy_by`, `promoteWaitlist` revokes codes of selected fans with no paid order (status `expired`, their session unlocks deleted, in-app notice) and gives the same number of waitlisted fans a code, in `lottery_rank` order. Statuses: `registered`, `selected`, `waitlisted`, `expired`.
-- **Ticket limit** is per account across paid orders, live holds from other sessions, and the new quantity. Guests are limited only per hold. Resale buys count too.
+- **Ticket limits**: `order_limit` caps one hold; `ticket_limit` is per account (and per email at finalize) across paid orders, live holds from other sessions, and the new quantity. Guests are limited per hold at hold time and by email at finalize. Resale buys count too.
 - **Bot defense** (`lib/defense.ts`): fixed-window counters in one upsert (`rate_limits`), keyed per action per IP and per account; per-IP keys use the client IP rules in `clientIp` (`TRUST_PROXY`); HMAC-derived math captcha whose nonce is burned on first use; honeypot field; `blocklist` for IPs and emails. Applied to login, queue join, checkout and presale code entry.
 
 ## Background jobs
@@ -206,7 +226,7 @@ Marked `ponytail:` in code:
 
 Other known gaps:
 
-- Pre-P8 pricing only: no dynamic pricing, add-ons, promo codes, offers (tables `offers` exist but are unused), no orphan-seat rule.
+- Add-ons carry no fee or tax; fees and tax are computed on the pre-discount face (the promo comes off the total). Offers are not locked at hold time. The seat map shows dynamic prices as of page load. Queue-depth demand (`j`) is the people waiting divided by 100, a fixed constant.
 - No seller fee, payouts, or per-event transfer/resale rules (P11). Ticket status `expired` and transfer expiry are checked lazily but no job sets them.
 - No 2FA, social login, account pages, protection, partial refunds or exchanges (P9). `oauth_links` and `codes.kind = 'otp'` are schema only.
 - Notifications have no inbox page; email/SMS are outbox-only.

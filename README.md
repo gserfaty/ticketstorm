@@ -2,7 +2,7 @@
 
 A Ticketmaster clone for learning and demo: Next.js 15 (App Router) + React 19 + TypeScript + SQLite via Node's built-in `node:sqlite`. No ORM, no database server, no external services. Payments, email, SMS and push are all simulated locally.
 
-Phases P1 to P7 of [docs/plan.md](docs/plan.md) are implemented. Design details are in [ARCHITECTURE.md](ARCHITECTURE.md), history in [CHANGELOG.md](CHANGELOG.md), the feature inventory that drives the plan in [docs/research.md](docs/research.md).
+Phases P1 to P8 of [docs/plan.md](docs/plan.md) are implemented. Design details are in [ARCHITECTURE.md](ARCHITECTURE.md), history in [CHANGELOG.md](CHANGELOG.md), the feature inventory that drives the plan in [docs/research.md](docs/research.md).
 
 ## Requirements
 
@@ -54,11 +54,21 @@ Seed data (deterministic, `scripts/seed.ts`): 12 cities with tax rates, 9 venues
 | `neon-harbor-megatour` | Waiting room. On sale 2 minutes after `npm run reset`, admits 6 per minute, 20 inside at once, 30 seeded fans already waiting. `/queue/<eventId>`; the tickets page and `POST /api/holds` return 403 until admitted. |
 | `neon-harbor-empire-wednesday` | Fan club presale open now. Premium sections are held back; enter code `STORMFAN` (25 uses) on the event page. |
 | `neon-harbor-catskill-saturday` | Verified Fan campaign. Registration closes 10 minutes after reset; 1 fan is selected. Log in, register, wait, then `npm run jobs` runs the lottery once and sends codes to `/dev/outbox`. |
-| `neon-harbor-empire-saturday` | Resale. `fan2` has a ticket listed (pink "Verified Resale" seat on the map). `fan` already owns 2 tickets here. |
+| `neon-harbor-empire-saturday` | Resale and pricing. `fan2` has a ticket listed (pink "Verified Resale" seat on the map). `fan` already owns 2 tickets here. Has a dynamic **Platinum** level (section 102, rows A-B, $250 base, price rises with tickets sold; a held ticket keeps its price), add-ons at checkout (**Lot A parking, inventory 1**: the second buyer gets "sold out"; tour T-shirt; club lounge), promo `FIVEOFF`, and child/senior/student offers. |
+| `neon-harbor-megatour` | Also a **Meet & Greet Package** level (section 101, rows A-B, perks text) and limits of 4 per order / 6 per event. |
 | `home-stand-1`, `-2`, `-3` | Three-game bundle at Empire Arena. Section `202` has a "Season Bundle" level: holding a seat there holds the same seat in all three games. |
 | `neon-harbor-empire-cancelled` | Cancelled event (not buyable). |
 | `neon-harbor-empire-onsale-soon` | Not yet on sale ("Upcoming"). |
 | `neon-harbor-empire-saturday` and `neon-harbor-catskill-saturday` | Same artist, same Saturday, two venues about 50 miles apart (radius and date-filter checks); a Wednesday show exists too. |
+
+## Promo codes, add-ons and offers (P8)
+
+| Code | Effect |
+|---|---|
+| `STORM10` | 10 percent off tickets, any event, 1000 uses |
+| `FIVEOFF` | $5 off, `neon-harbor-empire-saturday` only, 100 uses |
+
+Enter a code, pick child (50 percent), senior (25) or student (20) per ticket, and add parking, merch or hospitality on the checkout page, then press "Update order". The header button "All-in prices" switches every displayed price between face value and face + fees + tax. Admin sets platform fees at `/admin/fees` and per-city tax at `/admin/taxes`; organizers set limits, dynamic pricing, fees, offers, add-ons and promo codes at `/organizer/[orgId]/events/[id]/pricing`. Parking and hospitality purchases create their own QR passes under My tickets, scannable at `/scan/[eventId]`.
 
 ## Test cards
 
@@ -74,7 +84,7 @@ Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Be
 
 Checkout also asks a math question (single-use captcha) and has a hidden honeypot field.
 
-## Features implemented (P1 to P7)
+## Features implemented (P1 to P8)
 
 - **Accounts**: signup, login, logout, email verification, password reset (links in the dev outbox), scrypt hashing, cookie sessions, lazy guest sessions that survive login, `?next=` redirects.
 - **Discovery**: home (trending, near you), search with category, genre, city + radius, date range and quick "today / weekend / month" filters (venue-local dates), accessible-seating filter, suggest endpoint, category pages, event pages with lineup, venue info, status badges (On sale, Upcoming, Sold out, Cancelled, Postponed, Rescheduled, Ended).
@@ -88,8 +98,9 @@ Checkout also asks a math question (single-use captcha) and has a hidden honeypo
 - **Resale**: list, cancel, buy through the normal checkout; sellers credited in a ledger (`/listings` shows balance).
 - **Favorites**: hearts on events, venues and artists; `/favorites`.
 - **Waiting room, presales, Verified Fan, bot defense**: see the scenarios above. Organizers manage windows, codes (CSV), held-back seats and queue rate/cap at `/organizer/[orgId]/events/[id]/access` and `.../queue`. Limits: 5 queue joins per minute and 10 login/checkout/code attempts per minute per IP and per account; `blocklist` rows (`ip` / `email`) are refused at login, queue join, checkout and code entry.
+- **Pricing and inventory rules**: orphan-seat rule on manual selection and Best Available, per-order and per-event ticket limits, dynamic/Platinum pricing locked at hold time, per-event fee rules over admin defaults, per-city tax, all-in price toggle, promo codes, offers, VIP packages with perks, add-ons with scannable passes, sortable list view beside the seat map.
 
-Upcoming (see [docs/plan.md](docs/plan.md)): P8 pricing, ticket types, add-ons, orphan-seat rule; P9 checkout extras, account pages, protection, refunds and exchanges; P10 notifications, recommendations, artist and venue pages; P11 transfer/resale rules, payouts, reports, admin ops; P12 nice-to-have sweep.
+Upcoming (see [docs/plan.md](docs/plan.md)): P9 checkout extras, account pages, protection, refunds and exchanges; P10 notifications, recommendations, artist and venue pages; P11 transfer/resale rules, payouts, reports, admin ops; P12 nice-to-have sweep.
 
 ## Simulated external systems
 
@@ -99,7 +110,7 @@ Upcoming (see [docs/plan.md](docs/plan.md)): P8 pricing, ticket types, add-ons, 
 
 ## Tests
 
-`npm test` runs `node:test` suites in `tests/`: auth, discovery helpers, a multi-connection hold race, payments and idempotency, SafeTix windows, organizer/scan/refund flows including concurrent scans, resale and transfers including concurrent buys, queue and bot defense, presales and Verified Fan. They use temporary SQLite files via `TICKETSTORM_DB`.
+`npm test` runs `node:test` suites in `tests/`: auth, discovery helpers, a multi-connection hold race, payments and idempotency, SafeTix windows, organizer/scan/refund flows including concurrent scans, resale and transfers including concurrent buys, queue and bot defense, presales and Verified Fan, pricing (fees, tax, dynamic prices, promos, offers, add-ons, limits) and the orphan-seat rule. They use temporary SQLite files via `TICKETSTORM_DB`.
 
 ## Docs
 
