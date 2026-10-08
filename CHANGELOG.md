@@ -5,7 +5,7 @@ All notable changes, newest first. Format follows [Keep a Changelog](https://kee
 ## P10 review fixes
 
 #### Fixed
-- **ICS semicolons were never escaped**: `'\;'` in a JS string is just `;`, so the earlier entry's claim that `;` was escaped was wrong (and the test expectation matched the bug). `icsEscape` now emits `\;`; tests corrected.
+- **ICS semicolons were never escaped**: `'\;'` in a JS string is just `;`, so the earlier entry's claim that `;` was escaped was wrong (and the test expectation matched the bug). `icsEscape` now emits `\\;`; tests corrected.
 - **GET unsubscribed**: mail scanners and link previews fetch links. `GET /unsubscribe?t=` now only shows a one-button confirm form; only POST (same signed token, also what one-click unsubscribe sends) changes preferences.
 - **Preferences suppressed essential mail**: with order mail off, confirmations, cancel/postpone notices and transfer claim links were not sent. Order, ticket, transfer and event-change messages are essential: always sent, no footer, no preference. `PREF_CATEGORIES` is now `alerts` and `marketing` only (the misleading orders toggles are gone from `/account/notifications`; `orders_*` keys are ignored); `orders`-category alerts always reach the inbox; unsubscribe tokens for `orders` are rejected. `emailUser` is only for optional mail (alerts, marketing). Correction to the P10 entry below: event-change, confirmation and transfer emails no longer go through it.
 - **Organizers could not set age, bag policy, set times or notices**: the event edit page has an "Event page details" form (`setEventInfo`: length limits, set times one per line as `HH:MM Act`, other `info` keys kept, org-scoped through `authEvent`, audited as `event.info`). Notices are stored as text and escaped on render (checked with a `<script>` notice).
@@ -52,7 +52,6 @@ All notable changes, newest first. Format follows [Keep a Changelog](https://kee
 - "Watched event" = favorited event. Price-drop compares the cheapest non-bundle **face** price; dynamic surcharges and the all-in toggle are not part of that comparison.
 - "Ticket delivered" is sent at the moment tickets reach an account (checkout, review approval, transfer accept) rather than by a scheduled job, because delivery is instant here; it is still recorded in `alerts_sent` so it can't repeat. Guests have no preferences, so their mail is sent as written without an unsubscribe link.
 - Events have no end time: ICS uses 3 hours.
-- Organizers cannot yet edit age / bag / set times / notices in a form (seed and `events.info` JSON only).
 
 ---
 
