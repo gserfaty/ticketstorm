@@ -455,4 +455,47 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   addMessage(ticket, { staff: true, name: 'Ada Admin' }, 'Hi Frankie! Use "Transfer ticket" on the ticket page and enter your partner\'s email. They get a new ticket and the old code stops working.')
 }
 
+// P12A: an international city (Toronto, CAD display + local tax label), limited-view seats, discover lists and city guides.
+{
+  const org = (db.prepare("SELECT id FROM orgs WHERE name = 'Storm Live'").get() as { id: number }).id
+  const city = Number(db.prepare("INSERT INTO cities (name, state, lat, lng, tax_rate_bps, country) VALUES ('Toronto','ON',43.6532,-79.3832,1300,'CA')").run().lastInsertRowid)
+  const secs = generateVenue('theater')
+  const venue = Number(
+    db.prepare('INSERT INTO venues (org_id, slug, name, address, city_id, lat, lng, tz, capacity, info) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(org, 'harbourfront-theatre', 'Harbourfront Theatre', '235 Queens Quay W', city, 43.6387, -79.3817, 'America/Toronto', venueCapacity(secs), json({ transit: 'Streetcar 509 stops at the door.', bag: 'Small bags only.', accessibility: 'Step-free entrance on Queens Quay.', faq: [] })).lastInsertRowid)
+  for (const s of secs) {
+    const sid = Number(db.prepare('INSERT INTO sections (venue_id, name, kind, capacity, path, label_x, label_y, rank) VALUES (?,?,?,?,?,?,?,?)').run(venue, s.name, s.kind, s.capacity, s.path, s.label_x, s.label_y, s.rank).lastInsertRowid)
+    for (const t of s.seats) db.prepare('INSERT INTO seats (section_id, row, number, x, y, accessible, companion, obstructed) VALUES (?,?,?,?,?,?,?,?)').run(sid, t.row, t.number, t.x, t.y, t.accessible, t.companion, t.obstructed)
+  }
+  const start = new Date(Date.now() + 21 * 864e5).toISOString()
+  const toronto = Number(
+    db.prepare("INSERT INTO events (org_id, venue_id, slug, title, category, genre, starts_at, doors_at, description, info, status, onsale_at, popularity) VALUES (?,?,?,?,'music','Pop',?,?,?,?,'published',?,70)")
+      .run(org, venue, 'toronto-intl-demo', 'Neon Harbor: Toronto Night', start, start, 'International demo: prices are shown in local currency (approximate), tax is local HST, your card is charged in USD.', json({ age: 'All ages', bag: 'Small bags only', notices: '', set_times: [] }), new Date(Date.now() - 5 * 864e5).toISOString()).lastInsertRowid)
+  db.prepare("INSERT INTO event_artists (event_id, artist_id, billing) SELECT ?, id, 0 FROM artists WHERE slug = 'neon-harbor'").run(toronto)
+  for (const [name, cents, type, color] of [['General', 5500, 'standard', '#3b82f6'], ['Premium', 11000, 'standard', '#a855f7'], ['VIP', 22000, 'vip', '#ec4899'], ['Accessible', 5500, 'accessible', '#14b8a6']] as const)
+    db.prepare('INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type) VALUES (?,?,?,?,?)').run(toronto, name, color, cents, type)
+  generateInventory(toronto)
+
+  // limited view: a pillar in front of seats 1 and 2 of row C in every reserved section
+  db.prepare("UPDATE seats SET obstructed = 1 WHERE row = 'C' AND number <= 2").run()
+
+  // delivery and ticket-rule flags: print-at-home and will-call on the Saturday show; the Verified Fan show is non-transferable
+  db.prepare("UPDATE events SET print_ok = 1, willcall_ok = 1 WHERE slug IN ('neon-harbor-empire-saturday', 'toronto-intl-demo')").run()
+  db.prepare("UPDATE events SET non_transferable = 1, willcall_ok = 1 WHERE slug IN ('neon-harbor-catskill-saturday', 'home-stand-1')").run()
+
+  // editorial lists (event slugs picked from the data) and city guides
+  const top = (where: string, n: number) => (db.prepare(`SELECT slug FROM events WHERE status = 'published' AND starts_at > ? AND ${where} ORDER BY popularity DESC, starts_at LIMIT ?`).all(new Date().toISOString(), n) as { slug: string }[]).map((r) => r.slug)
+  const put = (slug: string, kind: string, title: string, blurb: string, cityName: string | null, items: [string, string][]) =>
+    db.prepare('INSERT INTO discover (slug, kind, title, blurb, city_id, items) VALUES (?,?,?,?,?,?)')
+      .run(slug, kind, title, blurb, cityName ? (db.prepare('SELECT id FROM cities WHERE name = ?').get(cityName) as { id: number }).id : null, json(items.map(([slug, note]) => ({ slug, note }))))
+  put('big-nights-out', 'list', 'Big nights out', 'The most talked-about shows over the next few months.', null,
+    [['neon-harbor-empire-saturday', 'Resale, Platinum seats and add-ons in one place.'], ['neon-harbor-megatour', 'The waiting room is open: bring patience.'], ...top("category = 'music'", 4).map((s) => [s, ''] as [string, string])])
+  put('laugh-out-loud', 'list', 'Laugh out loud', 'Stand-up and improv worth leaving the house for.', null, top("category = 'comedy'", 5).map((s) => [s, ''] as [string, string]))
+  put('family-day-out', 'list', 'Family day out', 'Circus, kids\' shows and early curtains.', null, top("category = 'family'", 5).map((s) => [s, ''] as [string, string]))
+  put('guide-new-york', 'guide', 'New York: a guide to the shows', 'Arena nights at Empire Arena and a summer drive up to the Catskills.', 'New York', [['neon-harbor-empire-saturday', 'The one everyone is asking about.'], ['neon-harbor-catskill-saturday', 'Two hours north, same Saturday, lawn seats.']])
+  put('guide-chicago', 'guide', 'Chicago: Lakefront nights', 'Theatre seats with a view of the water.', 'Chicago', [])
+  put('guide-nashville', 'guide', 'Nashville: small rooms, big sound', 'The Basement is the best-kept secret on the strip.', 'Nashville', [])
+  put('guide-toronto', 'guide', 'Toronto: the international demo', 'Prices in CAD (approximate), local HST, card charged in USD.', 'Toronto', [['toronto-intl-demo', 'Try the currency selector in the header.']])
+}
+
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

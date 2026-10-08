@@ -5,6 +5,7 @@ import NearMe from '../components/NearMe.tsx'
 import { CATEGORIES, eventsNear, recommendedEvents, trendingEvents } from '../lib/events.ts'
 import { db } from '../lib/db.ts'
 import { fmtDateTime } from '../lib/format.ts'
+import { topPicks } from '../lib/discover.ts'
 import { getUser } from '../lib/session.ts'
 
 export default async function Home() {
@@ -25,6 +26,9 @@ export default async function Home() {
         </div>
       )}
       <p className="genres">{CATEGORIES.map((c) => <Link key={c.slug} href={`/category/${c.slug}`}>{c.name}</Link>)}</p>
+      <h2>Top picks</h2>
+      {topPicks(3).map((e) => <EventCard key={e.id} e={e} />)}
+      <p className="muted"><Link href="/discover">Editors&apos; lists and city guides</Link> · <Link href="/map">Events on a map</Link></p>
       <h2>Trending</h2>
       {rest.map((e) => <EventCard key={e.id} e={e} />)}
       <h2>{user ? 'Recommended for you' : 'Popular picks'}</h2>

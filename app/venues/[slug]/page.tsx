@@ -6,10 +6,16 @@ import Heart from '../../../components/Heart.tsx'
 import MiniMap from '../../../components/MiniMap.tsx'
 import { db } from '../../../lib/db.ts'
 import { listEvents } from '../../../lib/events.ts'
+import { pageMeta } from '../../../lib/seo.ts'
 
 export const dynamic = 'force-dynamic'
 
 type Info = { parking?: string; transit?: string; bag?: string; accessibility?: string; faq?: { q: string; a: string }[] }
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
+  const v = db.prepare('SELECT v.slug, v.name, v.address, c.name AS city FROM venues v JOIN cities c ON c.id = v.city_id WHERE v.slug = ?').get((await params).slug) as { slug: string; name: string; address: string; city: string } | undefined
+  return v ? pageMeta(`${v.name}, ${v.city}: events and seating chart`, `Upcoming events, seating chart, parking and accessibility at ${v.name}, ${v.address}, ${v.city}.`, `/venues/${v.slug}`) : {}
+}
 
 export default async function VenuePage({ params }: { params: Promise<{ slug: string }> }) {
   const v = db

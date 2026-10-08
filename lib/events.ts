@@ -104,7 +104,7 @@ const PRICE_COLS = `, (SELECT min(price_cents) FROM price_levels WHERE event_id 
   EXISTS (SELECT 1 FROM price_levels WHERE event_id = e.id AND (dyn_k > 0 OR dyn_j > 0)) AS dyn, e.fee_rule, c.tax_rate_bps AS bps`
 
 // `opt.allIn`: the viewer's all-in toggle, so min/max/sort by price mean the prices on the cards. `opt.ref`: city to measure distance from when no city filter is set.
-export function searchEvents(f: Filters, limit = 60, opt: { allIn?: boolean; ref?: number } = {}): { rows: EventRow[]; total: number } {
+export function searchEvents(f: Filters, limit = 60, opt: { allIn?: boolean; ref?: number; offset?: number } = {}): { rows: EventRow[]; total: number } {
   const now = new Date().toISOString()
   const where = [VISIBLE, 'e.starts_at > ?']
   const args: (string | number)[] = [now]
@@ -179,7 +179,7 @@ export function searchEvents(f: Filters, limit = 60, opt: { allIn?: boolean; ref
     const d = (r: EventRow) => haversineKm(ref.lat, ref.lng, r.vlat, r.vlng)
     rows = rows.map((r) => [d(r), r] as const).sort((a, b) => a[0] - b[0]).map((x) => x[1])
   }
-  return { rows: rows.slice(0, limit), total: rows.length }
+  return { rows: rows.slice(opt.offset ?? 0, (opt.offset ?? 0) + limit), total: rows.length }
 }
 
 export function trendingEvents(limit: number): EventRow[] {
@@ -203,7 +203,7 @@ export function eventsByIds(ids: number[]): EventRow[] {
 }
 
 // Upcoming public events matching an extra condition (venue page, artist page, series).
-export function listEvents(cond: string, args: (string | number)[], limit = 50): EventRow[] {
+export function listEvents(cond: string, args: (string | number | null)[], limit = 50): EventRow[] {
   return db.prepare(`${SELECT} WHERE ${VISIBLE} AND e.starts_at > ? AND ${cond} ORDER BY e.starts_at LIMIT ?`).all(new Date().toISOString(), ...args, limit) as EventRow[]
 }
 
@@ -217,12 +217,13 @@ export function genresIn(category: string): string[] {
 
 export function getEvent(slug: string) {
   const e = db
-    .prepare(`SELECT e.*, v.name AS venue, v.slug AS venue_slug, v.tz, v.address, c.name AS city, c.state
+    .prepare(`SELECT e.*, v.name AS venue, v.slug AS venue_slug, v.tz, v.address, v.lat AS vlat, v.lng AS vlng, c.name AS city, c.state, c.country
       FROM events e JOIN venues v ON v.id = e.venue_id JOIN cities c ON c.id = v.city_id WHERE e.slug = ? AND ${VISIBLE}`)
     .get(slug) as
     | { id: number; slug: string; title: string; category: string; genre: string | null; starts_at: string; doors_at: string | null; image: string | null
         description: string | null; status: string; onsale_at: string | null; ticket_limit: number; order_limit: number | null; venue: string; venue_slug: string; tz: string
-        address: string; city: string; state: string; venue_id: number; queue_enabled: number; info: string | null; series_key: string | null }
+        address: string; city: string; state: string; country: string; vlat: number; vlng: number; venue_id: number; queue_enabled: number; info: string | null; series_key: string | null
+        print_ok: number; willcall_ok: number; non_transferable: number }
     | undefined
   if (!e) return undefined
   const lineup = db

@@ -10,9 +10,21 @@ import { allInOn, getSession, getUser } from '../../../lib/session.ts'
 import { registerVerifiedFan, unlockPresale } from '../../access/actions.ts'
 import Heart from '../../../components/Heart.tsx'
 import ShareButton from '../../../components/ShareButton.tsx'
-import { fmtDateTime, fmtDateTimeTz, money } from '../../../lib/format.ts'
+import { fmtDateTime, fmtDateTimeTz, localDate, money } from '../../../lib/format.ts'
+import { relatedEvents, viewingNow } from '../../../lib/discover.ts'
+import { pageMeta } from '../../../lib/seo.ts'
+import { weather } from '../../../lib/weather.ts'
+import EventCard from '../../../components/EventCard.tsx'
+import MiniMap from '../../../components/MiniMap.tsx'
+import Until from '../../../components/Until.tsx'
 
 type Win = { id: number; name: string; kind: string; starts_at: string; ends_at: string; requires_code: number; reg_starts: string | null; reg_ends: string | null; lottery_at: string | null }
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
+  const slug = (await params).slug
+  const e = getEvent(slug)
+  return e ? pageMeta(`${e.title} tickets, ${e.venue}, ${e.city}`, `${e.title} at ${e.venue}, ${e.city}, ${e.state}. ${e.description ?? ''}`.trim(), `/events/${slug}`) : {}
+}
 
 export default async function EventPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ error?: string; notice?: string; code?: string }> }) {
   const e = getEvent((await params).slug)
@@ -31,6 +43,9 @@ export default async function EventPage({ params, searchParams }: { params: Prom
   const max = orderLimit(e!)
   const info = eventInfo(e!.info)
   const others = otherDates(e!)
+  const related = relatedEvents(e!)
+  const viewers = viewingNow(e!.id)
+  const wx = weather(localDate(e!.starts_at, e!.tz), e!.city, e!.vlat)
   const hasAda = !!db.prepare('SELECT 1 FROM sections s JOIN seats st ON st.section_id = s.id WHERE s.venue_id = ? AND st.accessible = 1 LIMIT 1').get(e!.venue_id)
   // an unlocked presale lets this session shop before the public on-sale
   const presale = !!unlocked.length && s.label === 'Upcoming'
@@ -41,7 +56,8 @@ export default async function EventPage({ params, searchParams }: { params: Prom
       {e!.image && <img src={e!.image} alt="" className="hero-img" />}
       <Flash {...sp} />
       {info.notices && <p className="card notice-banner" role="alert"><strong>Notice:</strong> {info.notices}</p>}
-      <p>{fmtDateTimeTz(e!.starts_at, e!.tz)}</p>
+      <p>{fmtDateTimeTz(e!.starts_at, e!.tz)}{viewers > 0 && <> · <span className="badge" title="Sessions holding seats plus people in the waiting room in the last 5 minutes">{viewers} {viewers === 1 ? 'person' : 'people'} viewing</span></>}</p>
+      <p className="muted">Forecast (simulated, not real weather): {wx.sky}, high {wx.highC}°C / {Math.round(wx.highC * 1.8 + 32)}°F, low {wx.lowC}°C, {wx.rainPct}% chance of rain.</p>
       <p className="row"><a className="btn" href={`/api/events/${e!.id}/ics`}>Add to calendar</a> <ShareButton title={e!.title} path={`/events/${e!.slug}`} /></p>
       <ul className="plain">
         {e!.doors_at && <li>Doors: {fmtDateTime(e!.doors_at, e!.tz)}</li>}
@@ -96,7 +112,7 @@ export default async function EventPage({ params, searchParams }: { params: Prom
           <button>{s.canBuy ? 'Find tickets' : 'Find presale tickets'}</button>
         </form>
       ) : notOnSale ? (
-        <p><strong>On sale {fmtDateTime(e!.onsale_at!, e!.tz)}</strong></p>
+        <p><strong>On sale {fmtDateTime(e!.onsale_at!, e!.tz)}</strong> · <Until iso={e!.onsale_at!} label="On sale in" /></p>
       ) : s.label === 'Sold out' ? (
         <p><strong>Sold out.</strong></p>
       ) : (
@@ -106,6 +122,15 @@ export default async function EventPage({ params, searchParams }: { params: Prom
         <>
           <h2>Other dates</h2>
           <ul>{others.map((o) => <li key={o.id}><Link href={`/events/${o.slug}`}>{fmtDateTime(o.starts_at, o.tz)}</Link> · {o.venue}, {o.city}</li>)}</ul>
+        </>
+      )}
+      <h2>Getting there</h2>
+      <MiniMap lat={e!.vlat} lng={e!.vlng} name={e!.venue} />
+      <p><a href={`https://www.openstreetmap.org/directions?to=${e!.vlat}%2C${e!.vlng}`} rel="noopener noreferrer" target="_blank">Get directions to {e!.venue}</a> (OpenStreetMap)</p>
+      {related.length > 0 && (
+        <>
+          <h2>You might also like</h2>
+          {related.map((r) => <EventCard key={r.id} e={r} />)}
         </>
       )}
       <p className="muted"><Link href={`/support/ada?event=${e!.slug}`}>Request an accessibility accommodation</Link> (wheelchair space, companion seat, hearing assist, ASL)</p>

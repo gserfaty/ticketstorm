@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS cities (
   state TEXT NOT NULL,
   lat REAL NOT NULL,
   lng REAL NOT NULL,
-  tax_rate_bps INTEGER NOT NULL DEFAULT 0
+  tax_rate_bps INTEGER NOT NULL DEFAULT 0,
+  country TEXT NOT NULL DEFAULT 'US' -- not US = international: tax is labelled local VAT/GST and prices are shown with an approximate local currency
 );
 
 CREATE TABLE IF NOT EXISTS orgs (
@@ -166,7 +167,10 @@ CREATE TABLE IF NOT EXISTS events (
   refund_window_until TEXT,
   popularity INTEGER NOT NULL DEFAULT 0,
   published_at TEXT, -- set when a draft goes live; alerts for followed artists/venues count from here
-  approved INTEGER NOT NULL DEFAULT 1
+  approved INTEGER NOT NULL DEFAULT 1,
+  print_ok INTEGER NOT NULL DEFAULT 0,        -- 1 = print-at-home allowed (static code); 0 = mobile only
+  willcall_ok INTEGER NOT NULL DEFAULT 0,     -- 1 = buyers may pick "will-call" delivery (box-office pickup)
+  non_transferable INTEGER NOT NULL DEFAULT 0 -- 1 = tickets can be neither sent nor resold (server-enforced in assertTradable)
 );
 CREATE INDEX IF NOT EXISTS events_starts ON events(starts_at);
 CREATE INDEX IF NOT EXISTS events_series ON events(series_key);
@@ -322,8 +326,14 @@ CREATE TABLE IF NOT EXISTS orders (
   refund_error TEXT, -- set when a refund failed at the gateway; order stays 'cancelled' until a retry succeeds
   review_reason TEXT, -- why status is 'review': fraud score, organizer hold, failed installment
   fraud_score INTEGER,
+  ip TEXT,      -- client IP at checkout ('local' = unknown, never used for scalper detection)
+  card_fp TEXT, -- HMAC of brand+last4+exp: a card fingerprint, never the card
+  picked_up_at TEXT, -- will-call: when box office handed the tickets over
+  picked_up_by INTEGER REFERENCES users(id),
   idempotency_key TEXT NOT NULL UNIQUE
 );
+CREATE INDEX IF NOT EXISTS orders_card_fp ON orders(card_fp);
+CREATE INDEX IF NOT EXISTS orders_ip ON orders(ip);
 CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id);
 CREATE INDEX IF NOT EXISTS orders_event ON orders(event_id);
 
@@ -388,6 +398,7 @@ CREATE TABLE IF NOT EXISTS saved_cards (
   last4 TEXT NOT NULL,
   exp TEXT NOT NULL,
   fake_token TEXT NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0, -- express checkout preselects it
   UNIQUE(user_id, brand, last4)
 );
 
@@ -608,4 +619,44 @@ CREATE TABLE IF NOT EXISTS exchanges (
   from_order INTEGER NOT NULL REFERENCES orders(id),
   to_order INTEGER NOT NULL REFERENCES orders(id),
   diff_cents INTEGER NOT NULL
+);
+
+-- P12A
+-- Seeded editorial lists and city guides. items = JSON [{slug, note}] of event slugs; a guide (city_id set) also shows the city's venues and events.
+CREATE TABLE IF NOT EXISTS discover (
+  slug TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('list','guide')),
+  title TEXT NOT NULL,
+  blurb TEXT NOT NULL,
+  city_id INTEGER REFERENCES cities(id),
+  items TEXT NOT NULL DEFAULT '[]'
+);
+
+-- A fan's target price for an event. The alert job notifies once per (user, event, target) through alerts_sent.
+CREATE TABLE IF NOT EXISTS price_alerts (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  target_cents INTEGER NOT NULL CHECK (target_cents > 0),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (user_id, event_id)
+);
+
+-- Guest order lookup: a 6-digit code mailed to the order's email. Only a keyed hash is stored; single use, 15 minutes, 5 wrong tries.
+CREATE TABLE IF NOT EXISTS lookup_codes (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  order_id INTEGER NOT NULL REFERENCES orders(id),
+  code_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS lookup_order ON lookup_codes(order_id);
+
+-- Simulated "link another ticket vendor" (nothing is imported or sent anywhere).
+CREATE TABLE IF NOT EXISTS vendor_links (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  vendor TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (user_id, vendor)
 );

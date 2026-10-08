@@ -4,11 +4,17 @@ import EventCard from '../../../components/EventCard.tsx'
 import Heart from '../../../components/Heart.tsx'
 import { db } from '../../../lib/db.ts'
 import { listEvents } from '../../../lib/events.ts'
+import { pageMeta } from '../../../lib/seo.ts'
 
 export const dynamic = 'force-dynamic'
 
 const parse = <T,>(json: string | null, fallback: T): T => {
   try { return json ? JSON.parse(json) : fallback } catch { return fallback }
+}
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
+  const a = db.prepare('SELECT slug, name, bio FROM artists WHERE slug = ?').get((await params).slug) as { slug: string; name: string; bio: string | null } | undefined
+  return a ? pageMeta(`${a.name} tickets and tour dates`, a.bio ?? `Tour dates and tickets for ${a.name}.`, `/artists/${a.slug}`) : {}
 }
 
 export default async function ArtistPage({ params }: { params: Promise<{ slug: string }> }) {

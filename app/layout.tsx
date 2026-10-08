@@ -46,6 +46,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           <form action={toggleAllIn} className="city">
             <button title="Show prices with fees and tax included" aria-pressed={allIn}>{allIn ? 'All-in prices: on' : 'All-in prices: off'}</button>
           </form>
+          <Link href="/discover">Discover</Link>
+          <Link href="/map">Map</Link>
           {user && <Link href="/inbox" aria-label={`Inbox, ${unread} unread`}>Inbox{unread > 0 && <> <span className="badge on-sale">{unread}</span></>}</Link>}
           <details className="account">
             <summary>{user ? user.name || user.email : 'Account'}</summary>

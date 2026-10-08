@@ -5,13 +5,18 @@ import { db } from '../../lib/db.ts'
 import { allGenres, parseFilters, searchEvents } from '../../lib/events.ts'
 import { listCities } from '../../lib/geo.ts'
 import { allInOn } from '../../lib/session.ts'
+import { PER_PAGE, pageMath } from '../../lib/discover.ts'
+import Pager from '../../components/Pager.tsx'
 
 export default async function Search({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const f = parseFilters(await searchParams)
+  const sp = await searchParams
+  const f = parseFilters(sp)
   const allIn = await allInOn()
   const cityCookie = (await cookies()).get('city')?.value ?? ''
   const ref = /^\d+$/.test(cityCookie) ? Number(cityCookie) : undefined
-  const { rows, total } = searchEvents(f, 60, { allIn, ref })
+  const first = searchEvents(f, PER_PAGE, { allIn, ref })
+  const pg = pageMath(first.total, Array.isArray(sp.page) ? sp.page[0] : sp.page)
+  const { rows, total } = pg.page === 1 ? first : searchEvents(f, PER_PAGE, { allIn, ref, offset: pg.offset })
   const venues = db.prepare('SELECT slug, name FROM venues ORDER BY name').all() as { slug: string; name: string }[]
   return (
     <>
@@ -20,6 +25,7 @@ export default async function Search({ searchParams }: { searchParams: Promise<R
       {f.sort === 'distance' && !(f.city ?? ref) && <p className="muted">Pick a city to sort by distance; showing by date.</p>}
       <p className="muted">{total > rows.length ? `Showing ${rows.length} of ${total} events` : `${total} event${total === 1 ? '' : 's'}`}</p>
       {rows.map((e) => <EventCard key={e.id} e={e} />)}
+      <Pager path="/search" params={sp} page={pg.page} pages={pg.pages} />
     </>
   )
 }
