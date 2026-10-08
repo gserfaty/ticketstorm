@@ -405,3 +405,80 @@ CREATE TABLE IF NOT EXISTS favorites (
   ref_id INTEGER NOT NULL,
   PRIMARY KEY (user_id, kind, ref_id)
 );
+
+-- Access, queue, bot defense (P7)
+CREATE TABLE IF NOT EXISTS onsale_windows (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'fanclub' CHECK (kind IN ('public','artist','venue','card','fanclub','promoter','verified_fan','sponsor')),
+  starts_at TEXT NOT NULL,
+  ends_at TEXT NOT NULL,
+  requires_code INTEGER NOT NULL DEFAULT 1,
+  reg_starts TEXT,
+  reg_ends TEXT,
+  vf_slots INTEGER,
+  vf_buy_by TEXT,
+  lottery_at TEXT,
+  promoted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS windows_event ON onsale_windows(event_id);
+
+CREATE TABLE IF NOT EXISTS access_codes (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  window_id INTEGER NOT NULL REFERENCES onsale_windows(id),
+  code TEXT NOT NULL UNIQUE,
+  max_uses INTEGER NOT NULL DEFAULT 1,
+  uses INTEGER NOT NULL DEFAULT 0,
+  user_id INTEGER REFERENCES users(id),
+  CHECK (uses <= max_uses)
+);
+
+-- Which sessions have entered a valid code for a window (follows the session through login).
+CREATE TABLE IF NOT EXISTS window_unlocks (
+  window_id INTEGER NOT NULL REFERENCES onsale_windows(id),
+  session_token TEXT NOT NULL,
+  PRIMARY KEY (window_id, session_token)
+);
+
+CREATE TABLE IF NOT EXISTS vf_registrations (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  window_id INTEGER NOT NULL REFERENCES onsale_windows(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'registered' CHECK (status IN ('registered','selected','waitlisted')),
+  code TEXT,
+  UNIQUE(window_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS queue_entries (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  session_token TEXT NOT NULL,
+  user_id INTEGER REFERENCES users(id),
+  rank INTEGER NOT NULL,
+  joined_at TEXT NOT NULL,
+  admitted_at TEXT,
+  expires_at TEXT,
+  UNIQUE(event_id, session_token)
+);
+CREATE INDEX IF NOT EXISTS queue_order ON queue_entries(event_id, admitted_at, rank);
+
+-- Fixed-window counters: one row per (key, window start in ms). Also used for single-use captcha nonces.
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT NOT NULL,
+  window_start INTEGER NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (key, window_start)
+);
+
+CREATE TABLE IF NOT EXISTS blocklist (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  kind TEXT NOT NULL CHECK (kind IN ('ip','email')),
+  value TEXT NOT NULL,
+  UNIQUE(kind, value)
+);

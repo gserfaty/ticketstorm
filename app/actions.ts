@@ -3,6 +3,7 @@
 import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { db } from '../lib/db.ts'
+import { allowed, clientIp, isBlocked } from '../lib/defense.ts'
 import { hashPassword, randomToken, verifyPassword } from '../lib/auth.ts'
 import { sendEmail, APP_URL } from '../lib/notify.ts'
 import { nearestCity } from '../lib/geo.ts'
@@ -48,8 +49,9 @@ export async function loginAction(f: FormData) {
   const u = db.prepare('SELECT id, password_hash, status FROM users WHERE email = ?').get(email) as
     | { id: number; password_hash: string | null; status: string }
     | undefined
+  const ip = clientIp(await headers())
   // same message for unknown email / wrong password / blocked
-  if (!u?.password_hash || u.status !== 'active' || !verifyPassword(String(f.get('password') ?? ''), u.password_hash)) {
+  if (isBlocked(ip, email) || !allowed('login', ip, null, 10) || !u?.password_hash || u.status !== 'active' || !verifyPassword(String(f.get('password') ?? ''), u.password_hash)) {
     fail(`/login?next=${encodeURIComponent(nextOf(f))}`, 'Invalid email or password')
   }
   await login(u!.id)

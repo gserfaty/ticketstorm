@@ -24,7 +24,7 @@ const city = run("INSERT INTO cities (name, state, lat, lng, tax_rate_bps) VALUE
 const venue = run("INSERT INTO venues (org_id, slug, name, address, city_id, lat, lng, tz) VALUES (?, 'v','V','a',?,0,0,'UTC')", org, city)
 const sec = run("INSERT INTO sections (venue_id, name, kind, path, label_x, label_y, rank) VALUES (?, 'S', 'reserved', '', 0, 0, 1)", venue)
 for (let n = 1; n <= 30; n++) run("INSERT INTO seats (section_id, row, number, x, y) VALUES (?, 'A', ?, 0, 0)", sec, n)
-const ev = run("INSERT INTO events (org_id, venue_id, slug, title, category, starts_at, status, onsale_at) VALUES (?,?, 'e','E','music',?, 'published', ?)", org, venue, new Date(Date.now() + 864e5).toISOString(), new Date(Date.now() - 864e5).toISOString())
+const ev = run("INSERT INTO events (org_id, venue_id, slug, title, category, starts_at, status, onsale_at, ticket_limit) VALUES (?,?, 'e','E','music',?, 'published', ?, 100)", org, venue, new Date(Date.now() + 864e5).toISOString(), new Date(Date.now() - 864e5).toISOString())
 for (const n of ['General', 'Premium', 'VIP', 'Accessible']) run('INSERT INTO price_levels (event_id, name, price_cents, ticket_type) VALUES (?,?,5000,?)', ev, n, 'standard')
 inv.generateInventory(ev)
 const user = (name: string) => run('INSERT INTO users (email, name) VALUES (?,?)', `${name}@x.test`, name)

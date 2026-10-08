@@ -4,6 +4,7 @@ import { useActionState } from 'react'
 import { useFormStatus } from 'react-dom'
 import Countdown from './Countdown.tsx'
 import type { PayState } from '../app/checkout/actions.ts'
+import type { Captcha } from '../lib/defense.ts'
 
 type Saved = { id: number; brand: string; last4: string; exp: string }
 
@@ -13,7 +14,7 @@ function Submit({ label }: { label: string }) {
 }
 
 // Card number and CVC are never given a `name` that is logged or stored server-side; they are read once by the pay action.
-export default function PayForm({ action, holdId, idemKey, expiresAt, email, saved, canSave, total }: {
+export default function PayForm({ action, holdId, idemKey, expiresAt, email, saved, canSave, total, captcha }: {
   action: (prev: PayState, f: FormData) => Promise<PayState>
   holdId: number
   idemKey: string
@@ -22,10 +23,12 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
   saved: Saved[]
   canSave: boolean
   total: string
+  captcha: Captcha
 }) {
   const router = useRouter()
   const [state, formAction] = useActionState(action, {} as PayState)
   const v = state.v ?? {}
+  const cap = state.captcha ?? captcha
   return (
     <form action={formAction} className="stack">
       {state.error && <p className="error" role="alert">{state.error}</p>}
@@ -52,6 +55,9 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
       <input name="cvc" placeholder="CVC" inputMode="numeric" autoComplete="cc-csc" />
       {canSave && <label><input type="checkbox" name="save" /> Save this card</label>}
       <p className="muted">Test cards: 4242 4242 4242 4242 pays, 4000 0000 0000 0002 declines, 4000 0000 0000 3220 asks for 3D Secure.</p>
+      <input type="hidden" name="captchaToken" value={cap.token} />
+      <label>Are you human? What is {cap.question}? <input name="captchaAnswer" inputMode="numeric" required autoComplete="off" /></label>
+      <input name="website" className="hp" tabIndex={-1} autoComplete="off" aria-hidden="true" />
       <Submit label={`Pay ${total}`} />
     </form>
   )

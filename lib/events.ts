@@ -141,7 +141,7 @@ export function getEvent(slug: string) {
     .get(slug) as
     | { id: number; slug: string; title: string; category: string; genre: string | null; starts_at: string; doors_at: string | null; image: string | null
         description: string | null; status: string; onsale_at: string | null; ticket_limit: number; venue: string; venue_slug: string; tz: string
-        address: string; city: string; state: string; venue_id: number }
+        address: string; city: string; state: string; venue_id: number; queue_enabled: number }
     | undefined
   if (!e) return undefined
   const lineup = db

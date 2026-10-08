@@ -1,7 +1,10 @@
 'use server'
 
+import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { db } from '../../lib/db.ts'
+import { allowed, checkCaptcha, clientIp, isBlocked, newCaptcha } from '../../lib/defense.ts'
+import type { Captcha } from '../../lib/defense.ts'
 import { HoldError } from '../../lib/inventory.ts'
 import { approve3ds, fail3ds, finalize } from '../../lib/orders.ts'
 import { brandOf, validateCard } from '../../lib/payments.ts'
@@ -10,7 +13,7 @@ import { getSession, getUser } from '../../lib/session.ts'
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
 const back = (holdId: number, msg: string): never => redirect(`/checkout/${holdId}?error=${encodeURIComponent(msg)}`)
 // Form state returned to PayForm on a failed attempt: the message plus the non-card fields to refill. Never card number or CVC.
-export type PayState = { error?: string; v?: Record<string, string> }
+export type PayState = { error?: string; v?: Record<string, string>; captcha?: Captcha }
 const DECLINES: Record<string, string> = {
   card_declined: 'Your card was declined. Try another card.',
   insufficient_funds: 'Insufficient funds. Try another card.',
@@ -23,12 +26,17 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
   const holdId = Number(field(f, 'holdId'))
   if (!session || !Number.isInteger(holdId) || holdId < 1) redirect('/')
   const v = Object.fromEntries(['email', 'bname', 'baddress', 'bcity', 'bzip'].map((k) => [k, field(f, k)]))
-  const bad = (error: string): PayState => ({ error, v })
+  const bad = (error: string): PayState => ({ error, v, captcha: newCaptcha() }) // captchas are single-use: every refusal brings a new one
   const key = field(f, 'key')
   if (!/^[\w-]{8,64}$/.test(key)) return bad('Invalid form, reload and try again')
 
   const user = await getUser()
   const email = user ? user.email : field(f, 'email').toLowerCase()
+  const ip = clientIp(await headers())
+  if (isBlocked(ip, email)) return bad('We cannot process this order')
+  if (!allowed('checkout', ip, user?.id ?? null, 10)) return bad('Too many attempts, wait a minute')
+  if (field(f, 'website')) return bad('Invalid form, reload and try again') // honeypot
+  if (!checkCaptcha(field(f, 'captchaToken'), field(f, 'captchaAnswer'))) return bad('Wrong answer to the math question')
   if (!/^\S+@\S+\.\S+$/.test(email)) return bad('Enter a valid email')
   const billing = { name: field(f, 'bname'), address: field(f, 'baddress'), city: field(f, 'bcity'), zip: field(f, 'bzip') }
   if (Object.values(billing).some((v) => !v)) return bad('Fill in the billing address')

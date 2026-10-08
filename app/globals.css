@@ -56,3 +56,4 @@ textarea { font:inherit; padding:.4rem .6rem; border-radius:6px; border:1px soli
 
 .heart { display:inline; margin:0 } .heart button { background:none; border:0; padding:0 .25rem; font-size:1.1rem; cursor:pointer; color:#f472b6 }
 .row { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center }
+.hp { position:absolute; left:-9999px; width:1px; height:1px; opacity:0 }

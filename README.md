@@ -41,3 +41,11 @@ Seed data: 12 cities, 8 venues, 30 artists, 83 events (80 upcoming over the next
 - Ticket page (`/tickets/[id]`): send to an email or phone (claim link goes to `/dev/outbox`), cancel while pending; recipient opens `/transfers/[id]?token=`, logs in or signs up, accepts. The accepted ticket gets a new secret; the old QR is dead.
 - `/sell` and `/listings`: list a valid ticket at a price; resale seats show pink on the map and under "Verified Resale" on the ticket picker. Buyers hold the listing, then use normal checkout. Sellers are credited in `ledger` (no seller fee until P11).
 - Hearts on event cards/pages (events, venues, lineup artists); `/favorites` lists them. Guests are sent to log in.
+
+## Waiting room, presales, Verified Fan
+
+- `neon-harbor-megatour` has a waiting room and goes on sale 2 minutes after `npm run reset` (6 admitted/min, 20 inside at once, 30 seeded fans already waiting). `/queue/[eventId]` joins (math question + hidden honeypot) and polls every 5s; the tickets page and `POST /api/holds` return 403 until admitted. Organizers set it at `/organizer/[orgId]/events/[id]/queue`.
+- `neon-harbor-empire-wednesday` has a fan club presale open now: enter code `STORMFAN` on the event page to see and hold the held-back seats.
+- `neon-harbor-catskill-saturday` has a Verified Fan campaign (1 fan selected) that closes registration in 10 minutes; log in and register on the event page. After it closes, `npm run jobs` runs the lottery once and sends codes to `/dev/outbox`.
+- Organizers manage windows, codes (CSV) and held-back seats at `/organizer/[orgId]/events/[id]/access`.
+- Limits: 5 queue joins/min and 10 checkout/login attempts/min per IP and per account; `blocklist` rows (`ip`/`email`) are refused at login, queue join and checkout.

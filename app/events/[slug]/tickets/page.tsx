@@ -1,7 +1,9 @@
 import { notFound, redirect } from 'next/navigation'
 import { db } from '../../../../lib/db.ts'
 import { eventState, getEvent } from '../../../../lib/events.ts'
+import { openWindowIds } from '../../../../lib/access.ts'
 import { activeHold, getAvailability, isSoldOut } from '../../../../lib/inventory.ts'
+import { isAdmitted } from '../../../../lib/queue.ts'
 import { activeListings } from '../../../../lib/resale.ts'
 import { getSession, getUser } from '../../../../lib/session.ts'
 import { money } from '../../../../lib/format.ts'
@@ -16,6 +18,8 @@ export default async function Tickets({ params, searchParams }: { params: Promis
   const e = getEvent(slug)
   if (!e) notFound()
   if (!eventState(e!).canBuy) redirect(`/events/${slug}`)
+  const token = (await getSession())?.token
+  if (e!.queue_enabled && !(token && isAdmitted(e!.id, token))) redirect(`/queue/${e!.id}`)
   const sp = await searchParams
   const qty = Math.min(Math.max(parseInt(sp.qty ?? '', 10) || 2, 1), e!.ticket_limit)
   const listings = activeListings(e!.id, (await getUser())?.id ?? null)
@@ -55,14 +59,13 @@ export default async function Tickets({ params, searchParams }: { params: Promis
       .all(e!.id) as { id: number; section_id: number; row: string; number: number; x: number; y: number; flags: number }[]
   ).map((r): MapSeat => [r.id, r.section_id, r.row, r.number, r.x, r.y, r.flags])
   const levels = e!.levels.map((l) => ({ id: l.id, name: l.name, color: l.color, cents: l.price_cents, type: l.ticket_type }))
-  const token = (await getSession())?.token
   const hold = (token && activeHold(token, e!.id)) || null
 
   return (
     <>
       <h1>{e!.title}</h1>
       <p className="muted">{e!.venue} · pick seats, or let us find the best available. Tickets are held for a few minutes while you decide.</p>
-      <SeatMap eventId={e!.id} ticketLimit={e!.ticket_limit} qty={qty} sections={sections} levels={levels} seats={seats} initial={getAvailability(e!.id)} hold={hold} />
+      <SeatMap eventId={e!.id} ticketLimit={e!.ticket_limit} qty={qty} sections={sections} levels={levels} seats={seats} initial={getAvailability(e!.id, openWindowIds(e!.id, token))} hold={hold} />
       {resale}
     </>
   )

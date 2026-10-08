@@ -100,6 +100,9 @@ export async function login(userId: number) {
     db.prepare("UPDATE holds SET session_token = ?, user_id = ? WHERE session_token = ? AND status = 'active'").run(token, userId, old)
     db.prepare("UPDATE payments SET session_token = ? WHERE session_token = ? AND status = 'requires_3ds'").run(token, old)
     db.prepare('UPDATE orders SET session_token = ? WHERE session_token = ? AND user_id IS NULL').run(token, old)
+    // waiting-room place and unlocked presales follow the shopper through login
+    db.prepare('UPDATE queue_entries SET session_token = ?, user_id = ? WHERE session_token = ?').run(token, userId, old)
+    db.prepare('UPDATE window_unlocks SET session_token = ? WHERE session_token = ?').run(token, old)
   })
   await setCookie(token)
 }

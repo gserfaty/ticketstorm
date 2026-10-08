@@ -27,7 +27,7 @@ export default async function ManageEvent({ params, searchParams }: { params: Pr
       <Flash {...(await searchParams)} />
       <p>{e.venue} · {fmtDateTimeTz(e.starts_at, e.tz)}{!draft && !e.approved && <> · <strong>awaiting admin approval</strong></>}</p>
       <p>
-        <Link href={`${base}/pricing`}>Pricing and on-sale</Link> · <Link href={`${base}/inventory`}>Inventory</Link> · <Link href={`/scan/${e.id}`}>Scanner</Link> · <Link href={`/events/${e.slug}`}>Public page</Link>
+        <Link href={`${base}/pricing`}>Pricing and on-sale</Link> · <Link href={`${base}/inventory`}>Inventory</Link> · <Link href={`${base}/access`}>Presales</Link> · <Link href={`${base}/queue`}>Waiting room</Link> · <Link href={`/scan/${e.id}`}>Scanner</Link> · <Link href={`/events/${e.slug}`}>Public page</Link>
       </p>
       <p className="muted">{stats.orders} orders · attendance {att.scanned}/{att.total}{stats.failed > 0 && ` · ${stats.failed} refund(s) failed (admin notified)`}</p>
 

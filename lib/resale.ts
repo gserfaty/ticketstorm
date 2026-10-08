@@ -1,10 +1,11 @@
 import { db, tx } from './db.ts'
 import { eventState } from './events.ts'
-import { free, HoldError } from './inventory.ts'
+import { assertTicketLimit, free, HoldError } from './inventory.ts'
 import type { Owner } from './inventory.ts'
 import { ledgerAdd } from './ledger.ts'
 import { money } from './format.ts'
 import { notify } from './notify.ts'
+import { admittedNow } from './queue.ts'
 
 // The caller's own 'valid' ticket for an event that is still ahead and not cancelled; else HoldError. Shared by transfers and listings.
 export function assertTradable(ticketId: number, userId: number) {
@@ -47,7 +48,6 @@ export function cancelListing(userId: number, listingId: number) {
   })
 }
 
-// ponytail: ticket_limit is not applied to resale buys; P8 enforces it across orders.
 // Reserve one listing for this session: ONE conditional UPDATE (active, unexpired, not held by a live hold), so two buyers can't both hold it.
 // Checkout/finalize then treat the hold like any other (lines come from pricing.quote). Expiry is lazy via held_until.
 export function holdListing(listingId: number, owner: Owner): { holdId: number; expiresAt: string } {
@@ -61,6 +61,8 @@ export function holdListing(listingId: number, owner: Owner): { holdId: number; 
     if (!l) throw new HoldError('Listing not found', 404)
     if (owner.userId === l.seller_id) throw new HoldError("You can't buy your own listing", 403)
     if (!eventState(l).canBuy) throw new HoldError('Tickets are not on sale for this event')
+    if (!admittedNow(l.event_id, owner.sessionToken)) throw new HoldError('Join the waiting room to buy tickets for this event', 403)
+    assertTicketLimit(owner.userId, l.event_id, 1, owner.sessionToken)
     for (const h of db.prepare("SELECT id FROM holds WHERE session_token = ? AND event_id = ? AND status = 'active'").all(owner.sessionToken, l.event_id) as { id: number }[]) free(h.id)
     const now = new Date()
     const expiresAt = new Date(now.getTime() + l.hold_minutes * 60_000).toISOString()

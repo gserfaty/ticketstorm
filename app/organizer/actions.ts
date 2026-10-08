@@ -2,6 +2,7 @@
 
 import { notFound, redirect } from 'next/navigation'
 import { db } from '../../lib/db.ts'
+import * as access from '../../lib/access.ts'
 import { parseLocal } from '../../lib/format.ts'
 import { refundEvent } from '../../lib/orders.ts'
 import * as org from '../../lib/organizer.ts'
@@ -30,7 +31,7 @@ async function authEvent(f: FormData, roles = MANAGE) {
     | undefined
   if (!e) notFound()
   const { user } = await requireOrgRole(e!.org_id, roles)
-  const sub = ['pricing', 'inventory'].includes(text(f, 'page')) ? `/${text(f, 'page')}` : ''
+  const sub = ['pricing', 'inventory', 'access', 'queue'].includes(text(f, 'page')) ? `/${text(f, 'page')}` : ''
   return { ...e!, user, back: `/organizer/${e!.org_id}/events/${e!.id}${sub}` }
 }
 
@@ -185,4 +186,36 @@ export async function removeMember(f: FormData) {
   const orgId = num(f, 'orgId')
   const { user } = await requireOrgRole(orgId, ['owner'])
   run(`/organizer/${orgId}/members`, () => { org.removeMember(orgId, num(f, 'userId')); audit(user.id, 'member.remove', `org:${orgId}`, { userId: num(f, 'userId') }) })
+}
+
+export async function addWindowAction(f: FormData) {
+  const e = await authEvent(f)
+  const when = (k: string) => (text(f, k) ? parseLocal(text(f, k), e.tz) : null)
+  run(e.back, () => {
+    const id = access.addWindow(e.id, {
+      name: text(f, 'name'), kind: text(f, 'kind'), startsAt: when('startsAt'), endsAt: when('endsAt'), requiresCode: f.get('requiresCode') === 'on',
+      regStarts: when('regStarts'), regEnds: when('regEnds'), slots: num(f, 'slots'), buyBy: when('buyBy'),
+    })
+    audit(e.user.id, 'window.add', `event:${e.id}`, { windowId: id })
+  }, 'Window added')
+}
+
+export async function generateCodesAction(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => { const n = access.generateCodes(e.id, num(f, 'windowId'), num(f, 'n'), num(f, 'maxUses')); audit(e.user.id, 'codes.generate', `event:${e.id}`, { windowId: num(f, 'windowId'), n }) }, 'Codes generated')
+}
+
+export async function assignWindowAction(f: FormData) {
+  const e = await authEvent(f)
+  let n = 0
+  run(e.back, () => { n = access.assignWindow(e.id, num(f, 'windowId'), num(f, 'sectionId'), text(f, 'row')); audit(e.user.id, 'window.assign', `event:${e.id}`, { windowId: num(f, 'windowId'), section: num(f, 'sectionId'), row: text(f, 'row'), n }) }, 'Inventory updated')
+}
+
+export async function saveQueueAction(f: FormData) {
+  const e = await authEvent(f)
+  run(e.back, () => {
+    const on = f.get('enabled') === 'on'
+    access.setQueue(e.id, on, num(f, 'rate'), num(f, 'cap'))
+    audit(e.user.id, 'queue.set', `event:${e.id}`, { on, rate: num(f, 'rate'), cap: num(f, 'cap') })
+  })
 }

@@ -3,6 +3,8 @@ import { db, tx } from '../lib/db.ts'
 import { hashPassword } from '../lib/auth.ts'
 import { generateVenue, venueCapacity } from '../lib/venue-gen.ts'
 import { generateInventory, holdBestAvailable } from '../lib/inventory.ts'
+import { addWindow, assignWindow } from '../lib/access.ts'
+import { joinQueue } from '../lib/queue.ts'
 import { finalize } from '../lib/orders.ts'
 import { createListing } from '../lib/resale.ts'
 import { localToUtc, slugify } from '../lib/format.ts'
@@ -103,6 +105,8 @@ tx(() => {
       db.prepare('INSERT INTO users (email, name, password_hash, role, email_verified_at) VALUES (?,?,?,?,?)')
         .run(email, name, hashPassword('password123'), role, now.toISOString()).lastInsertRowid)
   }
+
+  users.forEach(([email], i) => db.prepare('UPDATE users SET phone = ? WHERE email = ?').run(`+1555010${i}00`, email))
 
   const orgId = Number(db.prepare("INSERT INTO orgs (name, status) VALUES ('Storm Live','approved')").run().lastInsertRowid)
   const member = db.prepare('INSERT INTO org_members (org_id, user_id, role) VALUES (?,?,?)')
@@ -219,6 +223,22 @@ tx(() => {
     addLevels(id, 50, v.kind)
   }
 
+  // P7. A high-demand show with a waiting room that opens in 2 minutes and admits only 6 a minute.
+  const inMin = (m: number) => new Date(now.getTime() + m * 60_000).toISOString()
+  {
+    const v = venueRows[0]
+    const d = new Date(today + 30 * DAY)
+    const title = 'Neon Harbor: Megatour Opening Night'
+    const startsAt = localToUtc(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 20, 0, v.tz)
+    const id = Number(
+      insEvent.run(orgId, v.id, fixedArtist.slug, 'neon-harbor-megatour', title, 'music', fixedArtist.genre, startsAt,
+        new Date(Date.parse(startsAt) - 3_600_000).toISOString(), `${title}. Waiting room on.`,
+        json({ age: 'All ages', bag: 'Clear bags only', notices: '', set_times: [] }), 'published', inMin(2), 100).lastInsertRowid)
+    insBill.run(id, fixedArtist.id, 0)
+    addLevels(id, 80, v.kind)
+    db.prepare('UPDATE events SET queue_enabled = 1, queue_rate = 6, queue_cap = 20 WHERE id = ?').run(id)
+  }
+
   // Three-game home stand at Empire Arena with a bundle level: holding a seat in section 202 holds it in all three games.
   const sports = artistRows.filter((a) => a.category === 'sports')
   const series = [20, 27, 34].map((off, i) => {
@@ -241,7 +261,31 @@ tx(() => {
   for (const e of db.prepare('SELECT id, series_key FROM events').all() as { id: number; series_key: string }[]) {
     generateInventory(e.id, e.id === series[0] ? '202' : null)
   }
+
 })
+
+{
+const inMin = (m: number) => new Date(Date.now() + m * 60_000).toISOString()
+// P7 presales: premium seats held back for a code-gated fan club window (open now, code STORMFAN) and for a Verified Fan campaign (registration closes in 10 minutes).
+const heldBack = (slug: string, windowId: number) => {
+  const ev = db.prepare('SELECT id, venue_id FROM events WHERE slug = ?').get(slug) as { id: number; venue_id: number }
+  const top = db.prepare("SELECT min(rank) AS r FROM sections WHERE venue_id = ? AND kind = 'reserved'").get(ev.venue_id) as { r: number }
+  for (const sec of db.prepare("SELECT id FROM sections WHERE venue_id = ? AND kind = 'reserved' AND rank = ?").all(ev.venue_id, top.r) as { id: number }[]) assignWindow(ev.id, windowId, sec.id, '')
+}
+const wed = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-empire-wednesday'").get() as { id: number }
+const fanclub = addWindow(wed.id, { name: 'Fan Club Presale', kind: 'fanclub', startsAt: inMin(-60), endsAt: inMin(2 * 24 * 60), requiresCode: true, regStarts: null, regEnds: null, slots: 0, buyBy: null })
+db.prepare("INSERT INTO access_codes (window_id, code, max_uses) VALUES (?, 'STORMFAN', 25)").run(fanclub)
+heldBack('neon-harbor-empire-wednesday', fanclub)
+const cat = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-catskill-saturday'").get() as { id: number }
+const vf = addWindow(cat.id, { name: 'Verified Fan Presale', kind: 'verified_fan', startsAt: inMin(15), endsAt: inMin(3 * 24 * 60), requiresCode: true, regStarts: inMin(-24 * 60), regEnds: inMin(10), slots: 1, buyBy: inMin(2 * 24 * 60) })
+heldBack('neon-harbor-catskill-saturday', vf)
+}
+
+// 30 other fans already waiting for the megatour, so positions are visible (random order: it is still before on-sale).
+{
+  const ev = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-megatour'").get() as { id: number }
+  for (let i = 0; i < 30; i++) joinQueue(ev.id, `seed-crowd-${i}`, null)
+}
 
 // fan@ gets a paid order (2 seats, upcoming event) through the real checkout path, so /tickets has content.
 {

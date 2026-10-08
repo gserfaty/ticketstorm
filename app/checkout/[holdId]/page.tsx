@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import Link from 'next/link'
 import { db } from '../../../lib/db.ts'
+import { newCaptcha } from '../../../lib/defense.ts'
 import { liveHold } from '../../../lib/orders.ts'
 import { listSavedCards } from '../../../lib/payments.ts'
 import { quote } from '../../../lib/pricing.ts'
@@ -48,7 +49,7 @@ export default async function Checkout({ params, searchParams }: { params: Promi
         </table>
       </div>
       {error && <p className="error">{error}</p>}
-      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={user ? listSavedCards(user.id) : []} canSave={!!user} total={money(q.total)} />
+      <PayForm action={pay} holdId={hold.id} idemKey={randomUUID()} expiresAt={hold.expires_at} email={user?.email ?? null} saved={user ? listSavedCards(user.id) : []} canSave={!!user} total={money(q.total)} captcha={newCaptcha()} />
       <p><Link href={`/events/${ev.slug}/tickets`}>Back to seat map</Link></p>
     </>
   )

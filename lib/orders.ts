@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { db, tx } from './db.ts'
-import { HoldError } from './inventory.ts'
+import { assertTicketLimit, HoldError } from './inventory.ts'
 import { recordCharge, refund } from './payments.ts'
 import type { Payment } from './payments.ts'
 import { quote } from './pricing.ts'
@@ -46,9 +46,11 @@ export function finalize(i: PayInput): PayResult {
   return tx(() => {
     const prior = db.prepare('SELECT * FROM payments WHERE idempotency_key = ?').get(i.key) as Payment | undefined
     if (prior) return resolve(prior, i.sessionToken)
-    if (!liveHold(i.holdId, i.sessionToken)) throw new HoldError('Your hold expired or is not yours', 410)
+    const hold = liveHold(i.holdId, i.sessionToken)
+    if (!hold) throw new HoldError('Your hold expired or is not yours', 410)
     const q = quote(i.holdId)
     if (!q.lines.length) throw new HoldError('Nothing to buy', 410)
+    assertTicketLimit(i.userId, hold.event_id, q.lines.length, i.sessionToken)
     const meta: Meta = { userId: i.userId, email: i.email, exp: i.exp, save: i.save, billing: i.billing }
     const { payment } = recordCharge({ key: i.key, holdId: i.holdId, sessionToken: i.sessionToken, amount: q.total, method: i.method, brand: i.brand, last4: i.last4, meta })
     return resolve(payment, i.sessionToken)
