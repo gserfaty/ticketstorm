@@ -9,7 +9,6 @@ import { allInOn, currencyPref, getSession, getUser } from '../lib/session.ts'
 import { CURRENCIES, validCurrency } from '../lib/currency.ts'
 import SearchBox from '../components/SearchBox.tsx'
 import { setCity, setCurrency, toggleAllIn } from './actions.ts'
-import { stopViewingAs } from './impersonate/actions.ts'
 
 export const metadata = { title: 'TicketStorm', description: 'Live events, tickets in a flash' }
 
@@ -28,7 +27,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         {imp && (
           <div className="imp-banner" role="alert">
             <span>Support mode: you are viewing TicketStorm as <strong>{user!.email}</strong> (admin {imp.email}). Security, payment, payout, organizer and admin actions are disabled. This session is audited.</span>
-            <form action={stopViewingAs}><button>Stop viewing as this user</button></form>
+            <form action="/impersonate/stop" method="post"><button>Stop viewing as this user</button></form>
           </div>
         )}
         <header className="top">

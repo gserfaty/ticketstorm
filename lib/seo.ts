@@ -4,7 +4,7 @@ import { APP_URL } from './notify.ts'
 
 export type Entry = { url: string; lastModified?: Date }
 
-// Only what a stranger may see: events that are not drafts, are approved and still ahead; venues and artists; category and discover pages.
+// Only what a stranger may see: events that are not drafts or cancelled, are approved and still ahead; venues and artists; category and discover pages.
 export function sitemapEntries(): Entry[] {
   const rows = (sql: string, ...a: string[]) => db.prepare(sql).all(...a) as { slug: string }[]
   const u = (path: string) => ({ url: `${APP_URL}${path}` })
@@ -12,7 +12,7 @@ export function sitemapEntries(): Entry[] {
     u('/'), u('/search'), u('/map'), u('/discover'),
     ...CATEGORIES.map((c) => u(`/category/${c.slug}`)),
     ...rows('SELECT slug FROM discover ORDER BY slug').map((r) => u(`/discover/${r.slug}`)),
-    ...rows("SELECT slug FROM events WHERE status != 'draft' AND approved = 1 AND starts_at > ? ORDER BY starts_at", new Date().toISOString()).map((r) => u(`/events/${r.slug}`)),
+    ...rows("SELECT slug FROM events WHERE status NOT IN ('draft','cancelled') AND approved = 1 AND starts_at > ? ORDER BY starts_at", new Date().toISOString()).map((r) => u(`/events/${r.slug}`)),
     ...rows('SELECT slug FROM venues ORDER BY slug').map((r) => u(`/venues/${r.slug}`)),
     ...rows('SELECT slug FROM artists ORDER BY slug').map((r) => u(`/artists/${r.slug}`)),
   ]

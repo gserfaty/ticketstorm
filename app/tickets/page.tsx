@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { db } from '../../lib/db.ts'
 import { fmtDateTime } from '../../lib/format.ts'
 import { ticketState } from '../../lib/ticketstate.ts'
-import { requireUser } from '../../lib/session.ts'
+import { getSession, requireUser } from '../../lib/session.ts'
 import OfflineTickets from '../../components/OfflineTickets.tsx'
 
 export const dynamic = 'force-dynamic'
@@ -30,7 +30,7 @@ export default async function Tickets() {
         </div>
       ))}
       {rows.length === 0 && <p>No upcoming tickets.</p>}
-      {rows.length > 0 && <OfflineTickets userId={user.id} urls={rows.filter((t) => t.status === 'valid' && t.order_status !== 'review').slice(0, 20).map((t) => `/tickets/${t.id}`)} />}
+      {rows.length > 0 && !(await getSession())?.impersonator_id && <OfflineTickets userId={user.id} urls={rows.filter((t) => t.status === 'valid' && t.order_status !== 'review').slice(0, 20).map((t) => `/tickets/${t.id}`)} />}
     </>
   )
 }

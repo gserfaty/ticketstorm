@@ -113,11 +113,12 @@ export function holdListing(listingId: number, owner: Owner): { holdId: number; 
   return tx(() => {
     const l = db
       .prepare(
-        `SELECT l.seller_id, e.id AS event_id, e.status, e.starts_at, e.onsale_at, e.hold_minutes FROM listings l JOIN tickets t ON t.id = l.ticket_id
+        `SELECT l.seller_id, e.id AS event_id, e.status, e.starts_at, e.onsale_at, e.hold_minutes, e.non_transferable FROM listings l JOIN tickets t ON t.id = l.ticket_id
          JOIN inventory i ON i.id = t.inventory_id JOIN events e ON e.id = i.event_id WHERE l.id = ? AND l.status = 'active' AND t.status = 'listed'`,
       )
-      .get(listingId) as { seller_id: number; event_id: number; status: string; starts_at: string; onsale_at: string | null; hold_minutes: number } | undefined
+      .get(listingId) as { seller_id: number; event_id: number; status: string; starts_at: string; onsale_at: string | null; hold_minutes: number; non_transferable: number } | undefined
     if (!l) throw new HoldError('Listing not found', 404)
+    if (l.non_transferable) throw new HoldError('Tickets for this event are non-transferable and cannot be resold')
     if (owner.userId === l.seller_id) throw new HoldError("You can't buy your own listing", 403)
     if (!eventState(l).canBuy) throw new HoldError('Tickets are not on sale for this event')
     if (!admittedNow(l.event_id, owner.sessionToken)) throw new HoldError('Join the waiting room to buy tickets for this event', 403)

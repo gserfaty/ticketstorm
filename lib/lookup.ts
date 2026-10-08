@@ -9,6 +9,29 @@ export const LOOKUP_TTL_MS = 15 * 60_000
 export const MAX_TRIES = 5
 const hash = (orderId: number, code: string) => mac(`lookup:${orderId}:${code}`).toString('hex')
 
+export function orderMatches(email: string, orderId: number): boolean {
+  return Number.isSafeInteger(orderId) && !!db.prepare("SELECT 1 FROM orders WHERE id = ? AND lower(email) = lower(?) AND status != 'pending'").get(orderId, email.trim())
+}
+
+// Which order a browser is verifying lives in a short-lived signed cookie (httpOnly, /lookup), so the email address never appears in a URL.
+export const lookupCookie = (email: string, orderId: number, now = Date.now()) => {
+  const body = Buffer.from(JSON.stringify({ e: email, o: orderId, x: now + LOOKUP_TTL_MS })).toString('base64url')
+  return `${body}.${mac(`lookupc:${body}`).toString('hex')}`
+}
+export function readLookupCookie(v: string | undefined, now = Date.now()): { email: string; orderId: number } | undefined {
+  const [body, sig] = (v ?? '').split('.')
+  if (!body || !sig || !/^[0-9a-f]{64}$/.test(sig)) return undefined
+  const want = mac(`lookupc:${body}`)
+  const got = Buffer.from(sig, 'hex')
+  if (got.length !== want.length || !timingSafeEqual(got, want)) return undefined
+  try {
+    const j = JSON.parse(Buffer.from(body, 'base64url').toString()) as { e: string; o: number; x: number }
+    return typeof j.e === 'string' && Number.isSafeInteger(j.o) && j.x > now ? { email: j.e, orderId: j.o } : undefined
+  } catch {
+    return undefined
+  }
+}
+
 // Mails a fresh code when (order, email) match; older codes for the order die. Returns whether it mailed (for tests; pages must not show it).
 export function requestCode(email: string, orderId: number, now = Date.now()): boolean {
   if (!Number.isSafeInteger(orderId) || orderId < 1) return false

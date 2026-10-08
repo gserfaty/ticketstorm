@@ -50,9 +50,10 @@ test('sitemap lists public upcoming events only', () => {
   mkEvent('hidden-draft', { status: 'draft' })
   mkEvent('hidden-unapproved', { approved: 0 })
   mkEvent('hidden-past', { days: -3 })
+  mkEvent('hidden-cancelled', { status: 'cancelled' })
   const urls = sitemapEntries().map((e) => e.url)
   assert.ok(urls.some((u) => u.endsWith('/events/pub-1')))
-  for (const s of ['hidden-draft', 'hidden-unapproved', 'hidden-past']) assert.ok(!urls.some((u) => u.endsWith(`/events/${s}`)), s)
+  for (const s of ['hidden-draft', 'hidden-unapproved', 'hidden-past', 'hidden-cancelled']) assert.ok(!urls.some((u) => u.endsWith(`/events/${s}`)), s)
   assert.ok(urls.some((u) => u.endsWith('/venues/v')))
 })
 
@@ -141,7 +142,7 @@ test('non-transferable tickets can be neither sent nor resold, and accept re-che
   holdErr(() => createTransfer(a, t1, 'friend@x.test'), /non-transferable/)
   holdErr(() => createListing(a, t1, 5000), /non-transferable/)
   const tok = get<{ claim_token: string }>('SELECT claim_token FROM transfers WHERE id = ?', pending).claim_token
-  holdErr(() => acceptTransfer(b, pending, tok), /non-transferable/)
+  holdErr(() => acceptTransfer(b, pending, tok), /cancelled/) // the pending transfer was cancelled when the flag went on
   assert.equal(get<{ owner_id: number }>('SELECT owner_id FROM tickets WHERE id = ?', t2).owner_id, a)
   setDeliveryRules(ev, { print_ok: false, willcall_ok: false, non_transferable: false })
   assert.ok(createListing(a, t1, 5000) > 0)
@@ -155,7 +156,7 @@ test('price alert notifies exactly once at or below the target; a new target re-
   const count = () => get<{ n: number }>("SELECT count(*) AS n FROM notifications WHERE user_id = ? AND kind = 'price_target'", u).n
   runAlerts(); runAlerts()
   assert.equal(count(), 0)
-  db.prepare('UPDATE price_levels SET price_cents = 3500 WHERE event_id = ? AND name = ?').run(ev, 'General')
+  db.prepare('UPDATE price_levels SET price_cents = 3500 WHERE event_id = ? AND name = ?').run(ev, 'VIP')
   runAlerts(); runAlerts(); runAlerts()
   assert.equal(count(), 1)
   assert.equal(priceTargetAlerts(), 0) // calling the job again directly sends nothing either
@@ -311,9 +312,10 @@ test('wallet: cards are validated, fingerprinted, capped; one default', () => {
   addCard(u, { number: '4242424242424242', exp: '12/39', cvc: '123' }, false)
   addCard(u, { number: '5555555555554444', exp: '11/39', cvc: '123' }, true)
   assert.throws(() => addCard(u, { number: '4242424242424242', exp: '12/39', cvc: '123' }, false), /already/)
-  const cards = db.prepare('SELECT id, last4, is_default, fp FROM saved_cards WHERE user_id = ? ORDER BY id').all(u) as { id: number; last4: string; is_default: number; fp: string }[]
+  const cards = db.prepare('SELECT id, last4, is_default, fp FROM saved_cards WHERE user_id = ? ORDER BY id').all(u) as { id: number; last4: string; is_default: number; fp: string | null }[]
   assert.deepEqual(cards.map((c) => c.is_default), [0, 1])
-  assert.ok(cards.every((c) => c.fp.length === 32 && !c.fp.includes(c.last4 + '0000')))
+  assert.equal(cards[0].fp, null) // published test card: no fingerprint outside production
+  assert.equal(cards[1].fp?.length, 32)
   setDefaultCard(u, cards[0].id)
   assert.deepEqual((db.prepare('SELECT is_default FROM saved_cards WHERE user_id = ? ORDER BY id').all(u) as { is_default: number }[]).map((c) => c.is_default), [1, 0])
   assert.throws(() => setDefaultCard(user('wallet-other'), cards[0].id), /not found/)
@@ -339,4 +341,57 @@ test('party link: signed, tamper-proof, expires, and shows seats without ever ex
   const json = JSON.stringify(view)
   for (const t of tickets) assert.ok(!json.includes(get<{ secret: string }>('SELECT secret FROM tickets WHERE id = ?', t).secret))
   assert.ok(!/@|secret|token/i.test(json))
+})
+
+// ---- P12A review fixes ----
+const { holdListing } = await import('../lib/resale.ts')
+const { orderMatches, lookupCookie, readLookupCookie } = await import('../lib/lookup.ts')
+const { cardFingerprint } = await import('../lib/payments.ts')
+
+test('turning non-transferable on cancels active listings and pending transfers, notifies sellers, and listings can no longer be held', () => {
+  const ev = mkEvent('nt-live')
+  const [seller, buyer] = [user('ntl-s'), user('ntl-b')]
+  const [t1, t2] = buy(seller, ev, { qty: 2 }).tickets
+  const listing = createListing(seller, t1, 5000)
+  const transfer = createTransfer(seller, t2, 'someone@x.test')
+  setDeliveryRules(ev, { print_ok: false, willcall_ok: false, non_transferable: true })
+  assert.equal(get<{ status: string }>('SELECT status FROM listings WHERE id = ?', listing).status, 'cancelled')
+  assert.equal(get<{ status: string }>('SELECT status FROM tickets WHERE id = ?', t1).status, 'valid')
+  assert.equal(get<{ status: string }>('SELECT status FROM transfers WHERE id = ?', transfer).status, 'cancelled')
+  assert.equal(get<{ n: number }>("SELECT count(*) AS n FROM notifications WHERE user_id = ? AND kind IN ('listing','transfer')", seller).n, 2)
+  // defence in depth: even a listing row that somehow stays active cannot be held
+  db.prepare("UPDATE listings SET status = 'active' WHERE id = ?").run(listing)
+  db.prepare("UPDATE tickets SET status = 'listed' WHERE id = ?").run(t1)
+  holdErr(() => holdListing(listing, { sessionToken: 'nt-b', userId: buyer }), /non-transferable/)
+  // saving the same setting again does not re-notify
+  const before = get<{ n: number }>('SELECT count(*) AS n FROM notifications').n
+  setDeliveryRules(ev, { print_ok: true, willcall_ok: false, non_transferable: true })
+  assert.equal(get<{ n: number }>('SELECT count(*) AS n FROM notifications').n, before)
+})
+
+test('price alert ignores levels with nothing left to buy', () => {
+  const ev = mkEvent('alert-stock')
+  const u = user('pa2')
+  // a cheap level nobody can buy (no inventory on it) must not trigger the alert
+  run("INSERT INTO price_levels (event_id, name, price_cents, ticket_type) VALUES (?, 'Ghost', 1000, 'standard')", ev)
+  setPriceAlert(u, ev, '20')
+  assert.equal(priceTargetAlerts(), 0)
+  db.prepare("UPDATE price_levels SET price_cents = 1500 WHERE event_id = ? AND name = 'VIP'").run(ev)
+  assert.equal(priceTargetAlerts(), 1)
+})
+
+test('lookup cookie is signed and expires; order matching is exact; test cards get no scalper fingerprint', () => {
+  const ev = mkEvent('lookup2')
+  const { orderId } = buy(null, ev, { email: 'a@x.test' })
+  assert.equal(orderMatches('A@x.test', orderId), true)
+  assert.equal(orderMatches('b@x.test', orderId), false)
+  const c = lookupCookie('a@x.test', orderId)
+  assert.deepEqual(readLookupCookie(c), { email: 'a@x.test', orderId })
+  assert.equal(readLookupCookie(c, Date.now() + 16 * 60_000), undefined)
+  const [body, sig] = c.split('.')
+  assert.equal(readLookupCookie(`${Buffer.from(JSON.stringify({ e: 'evil@x.test', o: orderId, x: Date.now() + 1e6 })).toString('base64url')}.${sig}`), undefined)
+  assert.equal(readLookupCookie(`${body}.${'0'.repeat(64)}`), undefined)
+  assert.equal(readLookupCookie(undefined), undefined)
+  assert.equal(cardFingerprint('4242424242424242'), undefined)
+  assert.equal(cardFingerprint('5555555555554444')?.length, 32)
 })

@@ -17,6 +17,7 @@ function boot(online: boolean) {
     },
     match: async () => undefined,
   }
+  const keysAtActivate: string[] = []
   const self = { location: { origin: 'http://t' }, skipWaiting() {}, clients: { claim: async () => {} }, addEventListener: (n: string, f: (e: any) => void) => (handlers[n] = f) }
   const fetchFn = async () => { if (!online) throw new Error('offline'); return new Response('live page') }
   vm.runInNewContext(readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8'), { self, caches, fetch: fetchFn, URL, Response })
@@ -27,7 +28,8 @@ function boot(online: boolean) {
     await Promise.all(waits)
     return out && (await out)
   }
-  return { stores, ask }
+  const activate = async () => { const waits: Promise<unknown>[] = []; handlers.activate({ waitUntil: (p: Promise<unknown>) => waits.push(p) }); await Promise.all(waits) }
+  return { stores, ask, activate }
 }
 
 test('service worker: serves a saved ticket page offline, never other pages, and clears on logout or login', async () => {
@@ -49,4 +51,20 @@ test('service worker: serves a saved ticket page offline, never other pages, and
   on.stores.set('ts-tickets-u1', new Map())
   await on.ask('http://t/orders', { method: 'POST' })
   assert.equal(on.stores.size, 1) // other POSTs leave the cache alone
+})
+
+test('service worker: query strings do not matter, impersonation stop and account deletion clear, old script caches are dropped on activate', async () => {
+  const off = boot(false)
+  off.stores.set('ts-tickets-u1', new Map([['http://t/tickets/5', 'saved']]))
+  assert.equal(await (await off.ask('http://t/tickets/5?notice=Hello&t=abc'))!.text(), 'saved')
+  for (const path of ['/impersonate/stop', '/account/privacy']) {
+    const on = boot(true)
+    on.stores.set('ts-tickets-u1', new Map([['x', 'y']]))
+    await on.ask(`http://t${path}`, { method: 'POST' })
+    assert.equal(on.stores.size, 0, path)
+  }
+  const a = boot(true)
+  a.stores.set('ts-static', new Map()); a.stores.set('ts-static-v2', new Map()); a.stores.set('ts-tickets-u1', new Map())
+  await a.activate()
+  assert.deepEqual([...a.stores.keys()].sort(), ['ts-static-v2', 'ts-tickets-u1'])
 })

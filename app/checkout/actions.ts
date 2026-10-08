@@ -3,13 +3,13 @@
 import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { db } from '../../lib/db.ts'
-import { allowed, checkCaptcha, clientIp, isBlocked, mac, newCaptcha } from '../../lib/defense.ts'
+import { allowed, checkCaptcha, clientIp, isBlocked, newCaptcha } from '../../lib/defense.ts'
 import type { Captcha } from '../../lib/defense.ts'
 import { HoldError } from '../../lib/inventory.ts'
 import { UserError } from '../../lib/platform.ts'
 import { setCheckoutOptions, setProtection } from '../../lib/pricing.ts'
 import { approve3ds, fail3ds, finalize } from '../../lib/orders.ts'
-import { brandOf, validateCard } from '../../lib/payments.ts'
+import { brandOf, cardFingerprint, validateCard } from '../../lib/payments.ts'
 import type { Method } from '../../lib/payments.ts'
 import { getSession, getUser, refuseImpersonation } from '../../lib/session.ts'
 
@@ -77,7 +77,7 @@ export async function pay(_: PayState, f: FormData): Promise<PayState> {
     ;({ exp } = card)
     brand = brandOf(card.number)
     last4 = card.number.slice(-4)
-    cardFp = mac(`card:${card.number}`).toString('hex').slice(0, 32) // keyed hash for scalper detection; the number itself goes no further
+    cardFp = cardFingerprint(card.number) // keyed hash for scalper detection (none for the test cards outside production); the number itself goes no further
   }
 
   let r

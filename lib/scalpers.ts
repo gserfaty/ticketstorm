@@ -4,7 +4,8 @@ import { refundOrder } from './orders.ts'
 // Anti-scalper flagging. A "cluster" is one event whose live orders came from SCALPER_ACCOUNTS or more different accounts (by email) that share
 // a card fingerprint (HMAC of the card number, never the number) or a client IP. The accounts are flagged for review (users.flagged) and an admin
 // can cancel and refund the whole cluster's orders through the shared refund function. 'local' (IP unknown, no TRUST_PROXY) is never a cluster key.
-// ponytail: the thresholds are constants and the test card 4242... is shared by every tester, so three accounts using it on one event trip this on purpose.
+// The five published test card numbers get no fingerprint outside production (payments.cardFingerprint), so demo buyers are not flagged; IP clusters still apply.
+// ponytail: the threshold is a constant.
 export const SCALPER_ACCOUNTS = 3
 const LIVE = "('paid','review','partially_refunded')"
 

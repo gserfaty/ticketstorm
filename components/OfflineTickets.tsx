@@ -14,12 +14,12 @@ export default function OfflineTickets({ userId, urls = [] }: { userId: number; 
         const mine = `ts-tickets-u${userId}`
         for (const k of await caches.keys()) if (k.startsWith('ts-tickets-') && k !== mine) await caches.delete(k)
         const cache = await caches.open(mine)
-        for (const u of [location.href, ...urls.map((p) => new URL(p, location.href).href)]) {
+        for (const u of [location.origin + location.pathname, ...urls.map((p) => new URL(p, location.href).origin + new URL(p, location.href).pathname)]) { // no query string: flash messages and tokens are not part of the key
           const res = await fetch(u, { credentials: 'same-origin', cache: 'no-store' })
           if (res.ok) await cache.put(u, res)
         }
         // the scripts this page runs, so it can start without the network (the SW also keeps them as they load)
-        const statics = await caches.open('ts-static')
+        const statics = await caches.open('ts-static-v2')
         await statics.addAll([...new Set(performance.getEntriesByType('resource').map((r) => r.name).filter((n) => new URL(n).pathname.startsWith('/_next/static/')))])
         if (!dead) setState('saved')
       } catch {

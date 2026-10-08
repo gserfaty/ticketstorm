@@ -5,7 +5,7 @@ import { db } from '../../../../lib/db.ts'
 import { fmtDateTimeTz } from '../../../../lib/format.ts'
 import { getTicket } from '../../../../lib/orders.ts'
 import { makePrintToken } from '../../../../lib/safetix.ts'
-import { getUser, getViewer } from '../../../../lib/session.ts'
+import { getSession, getUser, getViewer } from '../../../../lib/session.ts'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,6 +13,7 @@ export const dynamic = 'force-dynamic'
 export default async function PrintTicket({ params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id)
   const user = await getUser()
+  if ((await getSession())?.impersonator_id) notFound() // the static code is a bearer credential: never shown to an admin viewing as the user
   const t = Number.isInteger(id) && user ? getTicket(id, await getViewer()) : undefined
   if (!t || t.owner_id !== user!.id || t.status !== 'valid' || t.order_status === 'review') notFound()
   const ok = db.prepare('SELECT e.print_ok FROM tickets k LEFT JOIN inventory i ON i.id = k.inventory_id LEFT JOIN addons a ON a.id = k.addon_id JOIN events e ON e.id = coalesce(i.event_id, a.event_id) WHERE k.id = ?').get(id) as { print_ok: number }

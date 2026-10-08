@@ -1,7 +1,7 @@
 import { db, tx } from './db.ts'
 import { verifyPassword } from './auth.ts'
 import { UserError } from './platform.ts'
-import { brandOf, validateCard } from './payments.ts'
+import { brandOf, cardFingerprint, validateCard } from './payments.ts'
 import { mac } from './defense.ts'
 
 const digits = (s: string) => s.replace(/\D/g, '')
@@ -37,7 +37,7 @@ export function addCard(userId: number, c: { number: string; exp: string; cvc: s
   const last4 = c.number.slice(-4)
   const brand = brandOf(c.number)
   tx(() => {
-    const r = db.prepare('INSERT OR IGNORE INTO saved_cards (user_id, brand, last4, exp, fake_token, fp) VALUES (?,?,?,?,?,?)').run(userId, brand, last4, c.exp, 'tok_' + mac(`tok:${userId}:${c.number}`).toString('hex').slice(0, 24), mac(`card:${c.number}`).toString('hex').slice(0, 32))
+    const r = db.prepare('INSERT OR IGNORE INTO saved_cards (user_id, brand, last4, exp, fake_token, fp) VALUES (?,?,?,?,?,?)').run(userId, brand, last4, c.exp, 'tok_' + mac(`tok:${userId}:${c.number}`).toString('hex').slice(0, 24), cardFingerprint(c.number) ?? null)
     if (r.changes !== 1) throw new UserError('That card is already in your wallet')
     if (makeDefault || !db.prepare('SELECT 1 FROM saved_cards WHERE user_id = ? AND is_default = 1').get(userId)) setDefaultCard(userId, Number(r.lastInsertRowid))
   })

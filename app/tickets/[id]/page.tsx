@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation'
 import { db } from '../../../lib/db.ts'
 import { fmtDateTimeTz, money } from '../../../lib/format.ts'
 import { getTicket } from '../../../lib/orders.ts'
-import { getUser, getViewer } from '../../../lib/session.ts'
+import { getSession, getUser, getViewer } from '../../../lib/session.ts'
 import { priceBounds } from '../../../lib/resale.ts'
 import { transferCloses, transferRule } from '../../../lib/rules.ts'
 import { ticketState } from '../../../lib/ticketstate.ts'
@@ -24,6 +24,8 @@ export default async function Ticket({ params, searchParams }: { params: Promise
   if (!t) notFound()
   const user = await getUser()
   const mine = !!user && t!.owner_id === user.id
+  // an admin viewing as the user must not save the user's ticket page (it carries the secret) or reach print and party links
+  const impersonating = !!(await getSession())?.impersonator_id
   const now = new Date().toISOString()
   // controls only for the owner, only while the ticket is live and the show is ahead; the server re-checks every action
   const open = mine && t!.starts_at > now && !t!.addon // passes can't be transferred or resold
@@ -43,13 +45,13 @@ export default async function Ticket({ params, searchParams }: { params: Promise
       {notice && <p className="notice">{notice}</p>}
       <p>{t!.venue} · {fmtDateTimeTz(t!.starts_at, t!.tz)}</p>
       <p>{t!.addon ? `${t!.addon} pass` : t!.row ? `Section ${t!.section} Row ${t!.row} Seat ${t!.number}` : `General admission ${t!.section}`} · <span className="badge">{ticketState(t!.status, t!.order_status, t!.starts_at, !!pending)}</span></p>
-      {mine && t!.status === 'valid' && t!.order_status !== 'review' && <OfflineTickets userId={user!.id} />}
-      {mine && ev.event_id && t!.starts_at > now && (
+      {mine && !impersonating && t!.status === 'valid' && t!.order_status !== 'review' && <OfflineTickets userId={user!.id} />}
+      {mine && !impersonating && ev.event_id && t!.starts_at > now && (
         <p className="muted">Share where your group sits (no ticket codes are shown): <a href={`/party/${partyToken(user!.id, ev.event_id, t!.starts_at)}`}>party link</a> <ShareButton title={`My seats for ${t!.title}`} path={`/party/${partyToken(user!.id, ev.event_id, t!.starts_at)}`} /></p>
       )}
       {mine && <p className="muted"><a href={`/api/tickets/${id}/pass?wallet=apple`}>Add to Apple Wallet</a> · <a href={`/api/tickets/${id}/pass?wallet=google`}>Add to Google Wallet</a> (simulated passes)</p>}
       {delivery.delivery === 'willcall' && <p className="notice">Will-call: {delivery.picked_up_at ? `picked up at the box office on ${fmtDateTimeTz(delivery.picked_up_at, t!.tz)}.` : `pick up your tickets at the box office with photo ID and order #${t!.order_id}. The mobile code below works too.`}</p>}
-      {mine && t!.status === 'valid' && t!.order_status !== 'review' && (flags?.print_ok ? <p><Link href={`/tickets/${id}/print`}>Print this ticket</Link> <span className="muted">(static barcode, first scan wins)</span></p> : <p className="muted">Mobile tickets only for this event: printouts are not accepted.</p>)}
+      {mine && !impersonating && t!.status === 'valid' && t!.order_status !== 'review' && (flags?.print_ok ? <p><Link href={`/tickets/${id}/print`}>Print this ticket</Link> <span className="muted">(static barcode, first scan wins)</span></p> : <p className="muted">Mobile tickets only for this event: printouts are not accepted.</p>)}
       {t!.order_status === 'review' && <p className="notice">This order is under review. The ticket cannot be scanned or transferred until it is approved.</p>}
       {t!.starts_at > now && <p><Until iso={t!.starts_at} label="Show starts in" /></p>}
       {t!.status === 'valid' && t!.order_status !== 'review' ? <TicketQR ticketId={t!.id} secret={t!.secret} /> : t!.status !== 'valid' && <p>This ticket is {t!.status} and cannot be scanned.</p>}

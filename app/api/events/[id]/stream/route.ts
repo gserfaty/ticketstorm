@@ -10,8 +10,8 @@ export const dynamic = 'force-dynamic'
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id)
   if (!Number.isSafeInteger(id) || !db.prepare("SELECT 1 FROM events WHERE id = ? AND status != 'draft' AND approved = 1").get(id)) return Response.json({ error: 'Not found' }, { status: 404 })
+  const win = openWindowIds(id, (await getSession())?.token) // before acquire(): a throw here must not leak a slot
   if (!acquire()) return Response.json({ error: 'Too many live connections, poll instead' }, { status: 503, headers: { 'Retry-After': '10' } })
-  const win = openWindowIds(id, (await getSession())?.token)
   const enc = new TextEncoder()
   let closed = false
   let timer: ReturnType<typeof setInterval> | undefined

@@ -2,6 +2,21 @@
 
 All notable changes, newest first. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no version numbers yet; each section is a commit. Review-fix commits are grouped under their phase.
 
+## P12A review fixes
+
+#### Fixed
+- **Non-transferable left listings buyable.** `holdListing` now refuses events with `non_transferable`, and turning the flag on (`setDeliveryRules`, one tx) cancels the event's active listings (tickets back to `valid`, sellers notified, even a listing a buyer was checking out) and its pending transfers (senders notified). Saving the same setting again does nothing.
+- **Impersonation and offline/print.** While `sessions.impersonator_id` is set the ticket pages do not render `OfflineTickets`, the print link or the party link, `/tickets/[id]/print` is a 404, and the tickets list does not save pages. "Stop viewing as this user" is now a plain POST route (`/impersonate/stop`) instead of a server action so the service worker sees it; the worker also clears all `ts-*` caches on POSTs to `/impersonate/*` and `/account/privacy` (account deletion), besides `/logout`, `/login`, `/signup`, `/auth/*`.
+- **Scalper false positives.** The five published test card numbers get no fingerprint outside production (`payments.cardFingerprint`, used by `pay` and the wallet), so demo buyers are not flagged by the shared 4242 card; real card numbers and IP clusters work as before. The seed passes explicit fingerprints for its scalper demo.
+- **Lookup**: the email and order number are no longer in URLs; the pair is kept in a signed (HMAC), httpOnly cookie scoped to `/lookup` for 15 minutes, which the code step reads. The per-order limit now counts only requests whose email matches the order (the IP limit still counts everything), so a stranger cannot spend the owner's allowance.
+- **SSE slot leak**: `acquire()` runs after `getSession()` and `openWindowIds()`.
+- **Service worker**: static cache is versioned (`ts-static-v2`) and `activate` deletes older `ts-static*` caches; `OfflineTickets` and the worker key saved pages by origin and path only (no query string, so flash messages and `?t=` tokens never create entries or misses).
+- **Sitemap** excludes cancelled events.
+- **Price alerts** compare with the cheapest price level that still has an available seat (a sold-out cheap level no longer triggers them).
+
+#### Tests
+- Added: flag-on cancels listings and transfers, held listing refused, saving twice is silent; alert ignores a level without stock; lookup cookie signature, tamper and expiry, exact order match; test cards have no fingerprint; sitemap hides cancelled events; service worker query keys, new clearing paths and old-cache deletion.
+
 ## P12A: nice-to-have sweep, features 1 to 11
 
 Verified, not rebuilt: the Verified Fan waitlist (P7: `promoteWaitlist` gives codes to waitlisted fans when selected ones do not buy), transfer to a non-user by SMS link (`createTransfer` with a phone number texts a claim link; the recipient signs up to accept), and "reclaim" (= `cancelTransfer`; the ticket page button is now labelled "Reclaim ticket (cancel transfer)").

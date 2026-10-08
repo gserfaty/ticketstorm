@@ -4,7 +4,7 @@ import { alertUser } from './alerts.ts'
 import { money } from './format.ts'
 
 // "Tell me when tickets for this event are $X or less." Compared with the cheapest face price (before fees and tax, so the all-in toggle does
-// not matter). The job notifies at most once per (user, event, target) through alerts_sent; changing the target arms it again.
+// not matter) of the cheapest level that still has a seat to buy. The job notifies at most once per (user, event, target) through alerts_sent; changing the target arms it again.
 export function setPriceAlert(userId: number, eventId: number, dollars: string) {
   const m = /^\d{1,5}(\.\d{1,2})?$/.exec(dollars.trim())
   const cents = m ? Math.round(Number(dollars) * 100) : 0
@@ -25,11 +25,12 @@ export function getPriceAlert(userId: number, eventId: number): { target_cents: 
 export function priceTargetAlerts(): number {
   const rows = db
     .prepare(
-      `SELECT a.user_id, a.event_id, a.target_cents, e.title, e.slug, (SELECT min(price_cents) FROM price_levels WHERE event_id = e.id AND event_ids IS NULL) AS cur
+      `SELECT a.user_id, a.event_id, a.target_cents, e.title, e.slug, (SELECT min(pl.price_cents) FROM price_levels pl WHERE pl.event_id = e.id AND pl.event_ids IS NULL
+         AND EXISTS (SELECT 1 FROM inventory i WHERE i.price_level_id = pl.id AND (i.status = 'available' OR (i.status = 'held' AND i.held_until < ?)))) AS cur
        FROM price_alerts a JOIN events e ON e.id = a.event_id JOIN users u ON u.id = a.user_id AND u.status = 'active'
        WHERE e.status IN ('published','rescheduled') AND e.approved = 1 AND e.starts_at > ?`,
     )
-    .all(new Date().toISOString()) as { user_id: number; event_id: number; target_cents: number; title: string; slug: string; cur: number | null }[]
+    .all(new Date().toISOString(), new Date().toISOString()) as { user_id: number; event_id: number; target_cents: number; title: string; slug: string; cur: number | null }[]
   let n = 0
   for (const r of rows) {
     if (r.cur === null || r.cur > r.target_cents) continue

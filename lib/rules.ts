@@ -1,6 +1,8 @@
 import { db } from './db.ts'
 import { HoldError } from './inventory.ts'
 import { UserError } from './platform.ts'
+import { tx } from './db.ts'
+import { notify } from './notify.ts'
 
 // Per-event transfer and resale rules (events.transfer_rule / resale_rule JSON, only the fields the organizer set) over platform defaults.
 export type TransferRule = { enabled: boolean; deadline_hours: number | null }
@@ -76,7 +78,20 @@ export function assertTransferOpen(eventId: number, now = Date.now()) {
 
 // Organizer: how tickets reach the buyer and whether they can change hands. Printing and will-call are opt-in; mobile is always available.
 export function setDeliveryRules(eventId: number, f: { print_ok: boolean; willcall_ok: boolean; non_transferable: boolean }) {
-  db.prepare('UPDATE events SET print_ok = ?, willcall_ok = ?, non_transferable = ? WHERE id = ?').run(f.print_ok ? 1 : 0, f.willcall_ok ? 1 : 0, f.non_transferable ? 1 : 0, eventId)
+  tx(() => {
+    const was = (db.prepare('SELECT non_transferable AS n FROM events WHERE id = ?').get(eventId) as { n: number }).n
+    db.prepare('UPDATE events SET print_ok = ?, willcall_ok = ?, non_transferable = ? WHERE id = ?').run(f.print_ok ? 1 : 0, f.willcall_ok ? 1 : 0, f.non_transferable ? 1 : 0, eventId)
+    if (was || !f.non_transferable) return
+    // turning the restriction on ends what is already in flight: active listings (even one a buyer is checking out) and pending transfers are cancelled
+    const mine = 'ticket_id IN (SELECT t.id FROM tickets t JOIN inventory i ON i.id = t.inventory_id WHERE i.event_id = ?)'
+    const listed = db.prepare(`UPDATE listings SET status = 'cancelled', hold_id = NULL, held_until = NULL WHERE status = 'active' AND ${mine} RETURNING ticket_id, seller_id`).all(eventId) as { ticket_id: number; seller_id: number }[]
+    for (const l of listed) {
+      db.prepare("UPDATE tickets SET status = 'valid' WHERE id = ? AND status = 'listed'").run(l.ticket_id)
+      notify(l.seller_id, 'listing', 'Your resale listing was cancelled', 'The organizer made tickets for this event non-transferable. The ticket is still yours.', `/tickets/${l.ticket_id}`)
+    }
+    const sent = db.prepare(`UPDATE transfers SET status = 'cancelled' WHERE status = 'pending' AND ${mine} RETURNING ticket_id, from_user`).all(eventId) as { ticket_id: number; from_user: number }[]
+    for (const t of sent) notify(t.from_user, 'transfer', 'Your ticket transfer was cancelled', 'The organizer made tickets for this event non-transferable. The ticket is still yours.', `/tickets/${t.ticket_id}`)
+  })
 }
 
 export const DELIVERIES = ['mobile', 'print', 'willcall'] as const
