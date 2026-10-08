@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation'
 import { db } from '../lib/db.ts'
 import { hashPassword, randomToken, verifyPassword } from '../lib/auth.ts'
 import { sendEmail, APP_URL } from '../lib/notify.ts'
+import { nearestCity } from '../lib/geo.ts'
 import { login } from '../lib/session.ts'
 
 const field = (f: FormData, k: string) => String(f.get(k) ?? '').trim()
@@ -89,4 +90,10 @@ export async function setCity(f: FormData) {
     if (u.host === h.get('host')) back = u.pathname + u.search
   } catch {}
   redirect(back)
+}
+
+export async function setCityByCoords(lat: number, lng: number) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return
+  const c = nearestCity(lat, lng)
+  if (c) (await cookies()).set('city', String(c.id), { path: '/', maxAge: 365 * 86_400 })
 }

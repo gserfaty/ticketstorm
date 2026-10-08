@@ -5,6 +5,7 @@ import './globals.css'
 import { listCities } from '../lib/geo.ts'
 import { runJobsThrottled } from '../lib/jobs.ts'
 import { getUser } from '../lib/session.ts'
+import SearchBox from '../components/SearchBox.tsx'
 import { setCity } from './actions.ts'
 
 export const metadata = { title: 'TicketStorm', description: 'Live events, tickets in a flash' }
@@ -19,7 +20,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <header className="top">
           <Link href="/" className="brand">TicketStorm</Link>
           <form action="/search" className="search">
-            <input name="q" type="search" placeholder="Search artists, events, venues" aria-label="Search" />
+            <SearchBox />
           </form>
           <form action={setCity} className="city">
             <select name="city" defaultValue={city} aria-label="City">

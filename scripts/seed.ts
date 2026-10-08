@@ -50,7 +50,8 @@ const cities: [string, string, number, number, number, string][] = [
 ]
 
 // name, venue kind, city index
-const venues: [string, VenueKind, number][] = [
+// optional 4th: latitude offset in degrees (0.72 deg ~ 50 mi) for a second venue in the same metro
+const venues: [string, VenueKind, number, number?][] = [
   ['Empire Arena', 'arena', 0],
   ['Pacific Stadium', 'stadium', 1],
   ['Lakefront Theatre', 'theater', 2],
@@ -59,6 +60,7 @@ const venues: [string, VenueKind, number][] = [
   ['Peachtree Arena', 'arena', 8],
   ['Emerald Hall', 'theater', 6],
   ['Bayfront Amphitheater', 'amphitheater', 9],
+  ['Catskill Pavilion', 'amphitheater', 0, 0.72],
 ]
 const venueKinds = venues.map((v) => v[1])
 
@@ -115,7 +117,7 @@ tx(() => {
   member.run(orgId, uid['organizer@ticketstorm.test'], 'owner')
   member.run(orgId, uid['scanner@ticketstorm.test'], 'scanner')
 
-  const venueRows = venues.map(([name, kind, ci], i) => {
+  const venueRows = venues.map(([name, kind, ci, dLat = 0], i) => {
     const [, , lat, lng, , tz] = cities[ci]
     const secs = generateVenue(kind)
     const info = json({
@@ -127,7 +129,7 @@ tx(() => {
     })
     const venueId = Number(
       db.prepare('INSERT INTO venues (org_id, slug, name, address, city_id, lat, lng, tz, capacity, info) VALUES (?,?,?,?,?,?,?,?,?,?)')
-        .run(orgId, slugify(name), name, `${100 + i * 17} Main St`, cityIds[ci], lat + (rnd() - 0.5) * 0.04, lng + (rnd() - 0.5) * 0.04, tz, venueCapacity(secs), info)
+        .run(orgId, slugify(name), name, `${100 + i * 17} Main St`, cityIds[ci], lat + dLat + (rnd() - 0.5) * 0.04, lng + (rnd() - 0.5) * 0.04, tz, venueCapacity(secs), info)
         .lastInsertRowid)
     const insSection = db.prepare('INSERT INTO sections (venue_id, name, kind, capacity, path, label_x, label_y, rank) VALUES (?,?,?,?,?,?,?,?)')
     const insSeat = db.prepare('INSERT INTO seats (section_id, row, number, x, y, accessible, companion, obstructed) VALUES (?,?,?,?,?,?,?,?)')
@@ -153,6 +155,12 @@ tx(() => {
   const insEvent = db.prepare(
     `INSERT INTO events (org_id, venue_id, series_key, slug, title, category, genre, starts_at, doors_at, description, info, status, onsale_at, popularity)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+  const insLevel = db.prepare('INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type) VALUES (?,?,?,?,?)')
+  const addLevels = (eventId: number, base: number) => {
+    insLevel.run(eventId, 'General', '#3b82f6', base * 100, 'standard')
+    insLevel.run(eventId, 'Premium', '#a855f7', base * 200, 'standard')
+    insLevel.run(eventId, 'VIP', '#f59e0b', base * 400, 'vip')
+  }
   const insBill = db.prepare('INSERT INTO event_artists (event_id, artist_id, billing) VALUES (?,?,?)')
   
   // 80 upcoming (days 3..120) + 3 past
@@ -182,8 +190,35 @@ tx(() => {
         `${title}. One night only.`, json({ age: 'All ages', bag: 'Clear bags only', notices: '', set_times: [] }),
         status, new Date(onsale).toISOString(), int(0, 100)).lastInsertRowid)
     insBill.run(id, a.id, 0)
+    addLevels(id, a.category === 'sports' ? int(40, 90) : int(25, 70))
     if (a.category === 'music' && rnd() < 0.3) insBill.run(id, pick(artistRows.filter((b) => b.category === 'music' && b.id !== a.id)).id, 1)
   })
+
+  // Fixed events so discovery checks are verifiable: same artist, two venues ~50 mi apart,
+  // a Saturday and a Wednesday, one cancelled, one not yet on sale.
+  const fixedArtist = artistRows[0]
+  const dayAhead = (dow: number) => today + (((dow - new Date(today).getUTCDay() + 7) % 7) || 7) * DAY
+  const fixed: [string, number, number, string, number][] = [
+    // slug, venue index, day (ms), status, onsale offset days
+    ['neon-harbor-empire-saturday', 0, dayAhead(6), 'published', -10],
+    ['neon-harbor-catskill-saturday', 8, dayAhead(6), 'published', -10],
+    ['neon-harbor-empire-wednesday', 0, dayAhead(3), 'published', -10],
+    ['neon-harbor-empire-cancelled', 0, dayAhead(5), 'cancelled', -10],
+    ['neon-harbor-empire-onsale-soon', 0, dayAhead(5) + 7 * DAY, 'published', 3],
+  ]
+  for (const [slug, vi, day, status, onsaleOff] of fixed) {
+    const v = venueRows[vi]
+    const d = new Date(day)
+    const title = `Neon Harbor Live (${slug.split('-').slice(2).join(' ')})`
+    const startsAt = localToUtc(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 20, 0, v.tz)
+    const id = Number(
+      insEvent.run(orgId, v.id, fixedArtist.slug, slug, title, 'music', fixedArtist.genre, startsAt,
+        new Date(Date.parse(startsAt) - 3_600_000).toISOString(), `${title}. One night only.`,
+        json({ age: 'All ages', bag: 'Clear bags only', notices: '', set_times: [] }), status,
+        new Date(today + onsaleOff * DAY).toISOString(), 90).lastInsertRowid)
+    insBill.run(id, fixedArtist.id, 0)
+    addLevels(id, 50)
+  }
 })
 
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')
