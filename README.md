@@ -2,7 +2,7 @@
 
 A Ticketmaster clone for learning and demo: Next.js 15 (App Router) + React 19 + TypeScript + SQLite via Node's built-in `node:sqlite`. No ORM, no database server, no external services. Payments, email, SMS and push are all simulated locally.
 
-Phases P1 to P9 of [docs/plan.md](docs/plan.md) are implemented. Design details are in [ARCHITECTURE.md](ARCHITECTURE.md), history in [CHANGELOG.md](CHANGELOG.md), the feature inventory that drives the plan in [docs/research.md](docs/research.md).
+Phases P1 to P11 of [docs/plan.md](docs/plan.md) are implemented. Design details are in [ARCHITECTURE.md](ARCHITECTURE.md), history in [CHANGELOG.md](CHANGELOG.md), the feature inventory that drives the plan in [docs/research.md](docs/research.md).
 
 ## Requirements
 
@@ -96,6 +96,15 @@ Enter a code, pick child (50 percent), senior (25) or student (20) per ticket, a
 - **Notification settings**: `/account/notifications` (inbox / email / SMS for alerts and news; order and ticket messages are always sent, home city and alert radius).
 - **Accessibility**: tick "Accessible seating" on an event page, pick a seat marked with the wheelchair symbol, and the seat beside it (companion) is held with it; untick the companion box to hold only the one seat. `/support/ada` (linked from event and venue pages) files an accessibility request as a support ticket.
 
+## Trying the P11 features
+
+- **Seeded scenarios**: `storm-rules-demo` starts in 36 hours; `fan@` owns 2 tickets there. Transfers closed 48 hours before the show, so `/tickets/<id>` says so (and the server refuses). Resale must be 50 to 150 percent of face; try a price above the ceiling on `/sell`. `storm-settled-demo` is a finished show, already settled: as `organizer@` open Storm Live > `/organizer/1/payouts` (balance) and `/organizer/1/events/<id>/reports` (bars, CSV) and `.../marketing` (source `newsletter`). `fan@` has a support ticket with a reply at `/support`; `admin@` answers at `/admin/support`.
+- **Resale and payouts**: `fan2@` lists a ticket, `fan@` buys it (seller gets price minus 10 percent, buyer pays price plus 5 percent plus tax); the seller sees "Your ticket sold" in the inbox and email. `/account/payouts`: request the balance, then as `admin@` `/admin/payouts` > Mark paid (or Reject: the money returns). Edit or cancel listings at `/listings`. Admin sets platform resale defaults at `/admin/fees`; an organizer overrides them and the transfer deadline on the event page.
+- **Transfers**: a pending transfer that is old, or past the event's deadline, becomes `expired` after `npm run jobs`; the sender gets a notice. Recipients can decline.
+- **Tickets**: the QR has a moving band and blurs when you switch tabs. "Add to Apple Wallet" downloads a mock pass; "Tap to enter (NFC)" offers the token to a scanner page open in the same browser (a fan cannot admit a ticket by themselves).
+- **Marketing**: visit `/events/<slug>?src=newsletter`, buy, and the source appears under the event's Marketing page. The email campaign form there sends only to fans who turned on "News and offers" email (account > Notifications), with an unsubscribe link.
+- **Admin**: `/admin/fraud` (flagged users, busiest rate-limit keys, blocklist), `/admin/refunds` (all refunds), `/admin/audit`, `/admin/users` > "View as this user" (banner on every page, audited; security, payout, organizer and admin actions are disabled while viewing), `/help` for the FAQ and contact form.
+
 ## Test cards
 
 Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Behaviour is chosen by the last four digits. Card numbers and CVCs are never stored or logged; only brand and last4 are kept.
@@ -110,7 +119,7 @@ Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Be
 
 Checkout also asks a math question (single-use captcha) and has a hidden honeypot field.
 
-## Features implemented (P1 to P10)
+## Features implemented (P1 to P11)
 
 - **Accounts**: signup, login, logout, email verification, password reset (links in the dev outbox), scrypt hashing, cookie sessions, lazy guest sessions that survive login, `?next=` redirects.
 - **Discovery**: home (trending, near you), search with category, genre, city + radius, date range and quick "today / weekend / month" filters (venue-local dates), accessible-seating filter, suggest endpoint, category pages, event pages with lineup, venue info, status badges (On sale, Upcoming, Sold out, Cancelled, Postponed, Rescheduled, Ended).
@@ -130,17 +139,19 @@ Checkout also asks a math question (single-use captcha) and has a hidden honeypo
 
 - **Discovery, content and notifications (P10)**: price/genre/venue/resale/presale/accessible filters and five sorts, "Recommended for you" rail, event details and calendar file, venue and artist pages, alerts (new show, on-sale reminder, price drop, ticket delivered, transfer received, event changes) through an idempotent job into an inbox, email and SMS per category, signed one-click unsubscribe links, companion-seat auto-hold, ADA request form.
 
-Upcoming (see [docs/plan.md](docs/plan.md)): P11 transfer/resale rules, payouts, reports, admin ops; P12 nice-to-have sweep.
+- **Ticket states, rules, payouts, ops (P11)**: moving band and blur on the QR, mock wallet pass, NFC demo, ticket state everywhere, per-event transfer deadline and resale floor/ceiling/fees, seller payouts, organizer reports with CSV, settlement and marketing, admin fraud/refund/audit/support tools, impersonation, help center. See below.
+
+Upcoming (see [docs/plan.md](docs/plan.md)): P12 nice-to-have sweep.
 
 ## Simulated external systems
 
 - **Email and SMS** go to the `outbox` table and `console.log`; read them at `/dev/outbox` (404 when `NODE_ENV=production`). Verify links, reset links, order confirmations, transfer claim links and Verified Fan codes all land there.
 - **Push** is the `notifications` table, shown at `/inbox`.
-- **Payments** are the fake gateway in `lib/payments.ts`; **payouts** are not implemented (ledger only).
+- **Payments** are the fake gateway in `lib/payments.ts`; **payouts** are ledger rows that an admin marks paid (no bank).
 
 ## Tests
 
-`npm test` runs `node:test` suites in `tests/` (`tests/p10.test.ts` covers ICS, unsubscribe tokens, alert idempotency, companion holds, search and recommendations; `tests/p9.test.ts` covers refund caps, exchange both ways, installments, OTP, fraud review, protection, comps, social state and account export/delete): auth, discovery helpers, a multi-connection hold race, payments and idempotency, SafeTix windows, organizer/scan/refund flows including concurrent scans, resale and transfers including concurrent buys, queue and bot defense, presales and Verified Fan, pricing (fees, tax, dynamic prices, promos, offers, add-ons, limits) and the orphan-seat rule. They use temporary SQLite files via `TICKETSTORM_DB`.
+`npm test` runs `node:test` suites in `tests/` (`tests/p11.test.ts` covers resale rules and fees, the zero-sum ledger, payouts (including a concurrent overdraw race), transfer deadlines and expiry, CSV escaping, settlement, campaigns, impersonation and support threads; `tests/p10.test.ts` covers ICS, unsubscribe tokens, alert idempotency, companion holds, search and recommendations; `tests/p9.test.ts` covers refund caps, exchange both ways, installments, OTP, fraud review, protection, comps, social state and account export/delete): auth, discovery helpers, a multi-connection hold race, payments and idempotency, SafeTix windows, organizer/scan/refund flows including concurrent scans, resale and transfers including concurrent buys, queue and bot defense, presales and Verified Fan, pricing (fees, tax, dynamic prices, promos, offers, add-ons, limits) and the orphan-seat rule. They use temporary SQLite files via `TICKETSTORM_DB`.
 
 ## Docs
 

@@ -1,6 +1,6 @@
 # TicketStorm architecture
 
-Status: P1 to P10 of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
+Status: P1 to P11 of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
 
 ## Stack and why
 
@@ -32,6 +32,7 @@ lib/            all business logic; no React
   payments.ts   fake gateway pricing.ts quotes, fees, dynamic prices, display, promos    safetix.ts  rotating tokens
   transfers.ts resale.ts ledger.ts    scan.ts organizer.ts platform.ts
   fraud.ts installments.ts exchange.ts protection.ts orderadmin.ts    twofa.ts social.ts account.ts
+  rules.ts payouts.ts reports.ts (report, CSV, settlement) campaign.ts impersonation.ts ticketstate.ts
   alerts.ts (alert pipeline, unsubscribe tokens)  ics.ts (calendar files)  support.ts (ADA / support tickets)
   queue.ts access.ts defense.ts       session.ts auth.ts jobs.ts notify.ts events.ts geo.ts format.ts venue-gen.ts
 scripts/        seed.ts, jobs.ts
@@ -88,6 +89,8 @@ Defined in `lib/schema.sql` (`CREATE ... IF NOT EXISTS`, applied on every open; 
 **Orders and tickets**: `orders` (`hold_id` is UNIQUE: one order per hold; `idempotency_key` UNIQUE; `access_token` for guest links; `refund_error`; `review_reason`, `fraud_score`; `source` is `comp` or `exchange` for staff-made and exchange orders), `order_items` (kind `ticket|addon|protection|giftcard|fee|discount`; the per-order fee is its own `fee` row, a promo is a negative `discount` row, add-ons one row per unit, so item sums equal the total), `tickets` (status `valid|used|transferred|listed|resold|cancelled|expired`, per-ticket `secret`; either `inventory_id` for a seat or `addon_id` for an add-on pass, enforced by a CHECK), `payments` (kind charge/refund/payout; method card, saved, applepay, googlepay, paypal, installments, exchange; `idempotency_key` UNIQUE; `parent_id` on a refund points at its charge; `due_at` on a pending installment; `meta` JSON with contact and billing, never card number or CVC), `claims` (protection claims), `exchanges`. `order_items.refunded_cents` marks an item refunded on its own, `saved_cards` (brand, last4, exp, fake token).
 
 Key constraint: `one_live_ticket` is `UNIQUE ON tickets(inventory_id) WHERE status IN ('valid','listed','used')`. Even if application logic failed, two live tickets cannot exist for one seat. Add-on passes have a NULL `inventory_id`, which a unique index ignores, so any number of passes can exist.
+
+**Money and ops (P11)**: `payouts` (account `user:ID|org:ID`, status requested/paid/rejected), `settlements` (event_id PK), `orders.src`, `listings.seller_fee_pct`, `events.transfer_rule` / `resale_rule`, `sessions.impersonator_id`.
 
 **Fan to fan**: `transfers` (partial unique `one_pending_transfer` on `ticket_id` where `pending`; random 128-bit `claim_token`), `listings` (partial unique `one_active_listing` on `ticket_id` where `active`; `hold_id` + `held_until` reserve a listing for one buyer), `ledger` (append-only; account `user:ID|org:ID|platform`), `favorites`.
 
@@ -157,15 +160,44 @@ stateDiagram-v2
   transferred --> [*]
 ```
 
-`expired` exists in the schema but nothing sets it yet. A transfer or resale never mutates the old ticket into the new owner's: a **new** ticket row with a **new secret** is inserted, so the old QR is dead (the scanner admits only `valid`).
+The `expired` ticket status is still never written: `lib/ticketstate.ts` shows a valid ticket of a finished show as "expired (event over)" without rewriting the row. A transfer or resale never mutates the old ticket into the new owner's: a **new** ticket row with a **new secret** is inserted, so the old QR is dead (the scanner admits only `valid`).
 
-Resale holds reserve the *listing*, not inventory: `holdListing` runs one conditional UPDATE on `listings` (`active`, unexpired, not held by a live hold), after the same waiting-room and ticket-limit gates. The buyer pays the seller's asking price through ordinary `quote()` / `finalize()`. `settleListing` runs inside the buyer's finalize transaction before the buyer's ticket is inserted: listing to `sold`, seller ticket to `resold`, seller credited in `ledger` (`resale_credit`), seller notified. There is no seller fee yet (planned for P11).
+Resale holds reserve the *listing*, not inventory: `holdListing` runs one conditional UPDATE on `listings` (`active`, unexpired, not held by a live hold), after the same waiting-room and ticket-limit gates. The buyer pays the seller's asking price through ordinary `quote()` / `finalize()`. `settleListing` runs inside the buyer's finalize transaction before the buyer's ticket is inserted: listing to `sold`, seller ticket to `resold`, seller credited in `ledger` (`resale_credit`), seller notified. The seller fee, buyer fee, rules and ledger are described in "Resale money, ledger and payouts" below.
 
 ### Refunds and the ledger on cancel-after-resale
 
 `refundEvent(eventId)` cancels the event, releases live holds, cancels active listings and pending transfers, then refunds each order in its own transaction (idempotent: refunded orders are skipped; orders whose refund failed are retried). A refund failure (test card `0341`) leaves the order `cancelled` with `refund_error` set so `/admin/refunds` can retry; it is never marked `refunded`.
 
 A resold ticket exists on two orders (the original buyer's and the new buyer's) and both are refunded in full. To keep money zero-sum, the seller's resale credit is reversed once per listing: a `ledger` row `resale_credit` with `-price_cents` and `ref = 'listing:ID:reversal'`, guarded by a lookup on that ref. Net effect on the seller's ledger balance after cancellation is zero. Holders other than the buyer (transfer recipients, resale buyers) get an in-app notification.
+
+### Resale money, ledger and payouts (P11)
+
+**Rules.** `lib/rules.ts`: `events.resale_rule` / `transfer_rule` hold only the fields an organizer set, merged over `settings.resale_defaults` (built-ins: enabled, floor 0 percent, ceiling 300, seller fee 10, buyer fee 5) and over "enabled, no deadline" for transfers. `createListing` and `updateListing` check `floor <= price <= ceiling` of the **face** (`faceOf`: `order_items.unit_cents` on the original order line; a ticket from a resale order takes the face of the ticket it replaced). Transfer create and accept both call `assertTransferOpen`. Jobs `expireTransfers` and `expireListings` are conditional UPDATEs, so re-running is harmless.
+
+**Ledger.** One append-only table, double entry: every business event inserts rows that sum to zero, so `select sum(amount) from ledger` is always 0 (tested, and shown on `/admin/payouts`). A row's amount is the change in what the platform owes that account. Accounts: `user:ID`, `org:ID` (drawable balances), `platform` (fees kept), `tax` (owed to the city), `payouts` (requested, not yet paid), `cash` (the real-world other side; negative = money the platform holds).
+
+| Event | Rows (ref) |
+|---|---|
+| Resale sold (`listing:ID`) | cash -(price + buyer fee + tax); seller +(price - seller fee); platform +seller fee; platform +buyer fee; tax +tax |
+| Cancel after resale (`listing:ID:reversal`, once) | every row above negated, so the seller loses exactly the net credit |
+| Settlement (`settle:event:ID`, once per event) | cash -collected; org +net; platform +fees and protection; tax +tax |
+| Payout request (`payout:ID`) | account -X; payouts +X (this reserves the funds) |
+| Payout paid (`payout:ID:paid`) | payouts -X; cash +X |
+| Payout rejected (`payout:ID:rejected`) | payouts -X; account +X |
+
+The buyer fee is the ticket item's `fee_cents` on the resale order (`source = 'resale'`); `quote()` uses a fee rule of just the buyer percent for resale holds, so `sum(unit + fee + tax) == total` as for any order. A seller balance can go negative if a cancellation reverses a credit already paid out; payouts require balance >= amount.
+
+**Payouts.** `requestPayout` runs the balance read, the `payouts` insert and both ledger rows inside one `BEGIN IMMEDIATE` transaction. Because the debit is written with the request, a pending payout can never be spent twice, and concurrent requests serialize on the write lock (tested with 6 connections). `decidePayout` is a conditional UPDATE on `status = 'requested'`.
+
+**Settlement.** `settleEvent` needs the event over (start + 6 hours), not cancelled, and no order in review or with a refund error. `INSERT INTO settlements` on the event PRIMARY KEY is what makes it idempotent. Net to the organizer = face (subtotal - discount) of live orders (paid, partially refunded; resale orders excluded) minus refunds paid on them; fees, protection premiums and tax stay with the platform and the city.
+
+### Impersonation
+
+`lib/impersonation.ts`: an admin (never another admin, never a blocked user) swaps their session for a 1-hour session of the target with `sessions.impersonator_id`. The root layout shows a banner on every page. `requireSelf()` (in `session.ts`) refuses while the session has an impersonator, and is what `requireAdmin`, `requireOrgRole` and every account action (profile, phone, password-confirmed forms, 2FA, saved cards, delete account, payouts) go through; so the impersonator can look and use fan features but cannot change the target's password, 2FA or payment methods, request payouts, run organizer mutations, or reach admin actions. Start and stop (including logout) are written to `audit_log` with the admin as actor. Stopping signs the admin back in with a fresh session.
+
+### Audit
+
+`audit(actor, action, target, data)` in `lib/platform.ts` is the only writer. Every exported action in `app/admin/actions.ts` and `app/organizer/actions.ts` calls it (a test greps both files); impersonation audits itself in `lib/impersonation.ts`.
 
 ### Order statuses
 
@@ -217,6 +249,10 @@ A parking or hospitality unit is an `order_items` row of kind `addon` plus a `ti
 ### SafeTix tokens
 
 `lib/safetix.ts`: token is `ticketId.window.HMAC-SHA256(secret, "ticketId:window")` with `window = floor(ms / 15000)`. The browser (`components/TicketQR.tsx`) computes the same value with `crypto.subtle`, so it rotates without a server round-trip. The server accepts the current window plus or minus one (clock skew) and compares with `timingSafeEqual`. A genuine HMAC outside the window is reported as `expired` (stale screenshot); anything else is `invalid`.
+
+### Marketing source
+
+`middleware.ts` copies a valid `?src=` slug into a 30-day cookie; `pay` reads the cookie and `finalize` stores the slug on `orders.src` (checked again with the same regex). A cookie rather than a `sessions` column because login replaces the session token.
 
 ### Scanner
 
@@ -274,7 +310,7 @@ A seat's companion is found, not stored: the seat in the same section and row, n
 - In-app notifications (push stand-in): `notifications` rows via `notify()`; read at `/inbox`.
 - Social login: `/auth/mock/[provider]` is a fake consent screen (404 in production). SMS 2FA codes and order texts go to the outbox.
 - Payments: `lib/payments.ts`, behaviour keyed on last4. Card numbers and CVCs exist only in the request that carries them. Refunds are rows in `payments` with kind `refund`.
-- Camera scanning uses `BarcodeDetector` with a paste fallback. No OAuth, wallet, NFC or payouts.
+- Camera scanning uses `BarcodeDetector` with a paste fallback. Wallet passes are mock JSON, NFC is a `BroadcastChannel` demo to the scanner page, payouts are ledger rows that an admin marks paid. No OAuth.
 
 ## Testing strategy
 
@@ -297,7 +333,7 @@ Marked `ponytail:` in code:
 Other known gaps:
 
 - Add-ons carry no service or facility fee (parking is also untaxed). Offers are not locked at hold time. The seat map shows dynamic prices as of page load. Queue-depth demand (`j`) is the people waiting (joined or polled in the last 2 minutes) divided by 100, a fixed constant.
-- No seller fee, payouts, or per-event transfer/resale rules (P11). Ticket status `expired` and transfer expiry are checked lazily but no job sets them.
+- P11 deferrals: settlement is manual (owner/finance press Settle), a partial refund is taken from the organizer share even if it returned fees and tax (`ponytail:` in `lib/reports.ts`), campaigns do not reach guest buyers (no preference to check), the `?src=` cookie is last-touch for 30 days, the NFC tap works only within one browser.
 - P9 deferrals (`ponytail:` in code): a failed installment is not retried automatically; an item refund on a pay-in-4 order is capped at what was paid; exchange refuses promo, bundle and installment orders; the 2FA phone number is not verified when 2FA is turned on; wallet payments are simulated (no token); the mock IdP trusts whatever identity is typed (disabled in production).
 - Email/SMS are outbox-only. Preferences apply to optional alerts and marketing only; order, ticket, transfer and event-change messages are essential and ignore them.
 - P10: price drops compare base face price only; ICS end time is a fixed 3 hours; the venue map is a schematic SVG, not tiles; on-sale reminders depend on the jobs running in the hour before on-sale; the companion link is adjacency, so a chart where the companion is not beside the accessible seat gets no auto-hold.
