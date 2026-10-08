@@ -1,6 +1,6 @@
 # TicketStorm architecture
 
-Status: P1 to P8 of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
+Status: P1 to P9 of [docs/plan.md](docs/plan.md). Statements here describe the code as it is, not the plan.
 
 ## Stack and why
 
@@ -21,7 +21,8 @@ Conventions: money is integer cents; times are UTC ISO strings and venues carry 
 app/            routes (server components), server actions (actions.ts files), route handlers (route.ts)
   api/          events/[id]/inventory, holds, holds/[id], queue/[eventId], scan, suggest
   organizer/    org-scoped tools; guard.ts loads an event and checks the viewer against ITS org
-  admin/ (users, orgs, events, refunds, flags, fees, taxes) scan/ checkout/ orders/ tickets/ transfers/ sell/ listings/ favorites/ queue/ access/ dev/outbox
+  admin/ (users, orgs, events, orders, review, claims, refunds, flags, fees, taxes) scan/ checkout/ (3ds/, paypal/) orders/ (+ receipt) tickets/ (+ exchange) transfers/ sell/ listings/ favorites/ queue/ access/
+  account/ (profile, payment, notifications, security, privacy + export)  login/otp  auth/mock/[provider]  dev/outbox
 components/     client components: SeatMap, TicketQR, PayForm, QueueRoom, Scanner, Countdown, ...
 lib/            all business logic; no React
   schema.sql    the one idempotent schema, applied on every DB open
@@ -29,6 +30,7 @@ lib/            all business logic; no React
   inventory.ts  holds        orders.ts  finalize, refunds, authorization
   payments.ts   fake gateway pricing.ts quotes, fees, dynamic prices, display, promos    safetix.ts  rotating tokens
   transfers.ts resale.ts ledger.ts    scan.ts organizer.ts platform.ts
+  fraud.ts installments.ts exchange.ts protection.ts orderadmin.ts    twofa.ts social.ts account.ts
   queue.ts access.ts defense.ts       session.ts auth.ts jobs.ts notify.ts events.ts geo.ts format.ts venue-gen.ts
 scripts/        seed.ts, jobs.ts
 tests/          *.test.ts (+ worker files for multi-connection races)
@@ -73,7 +75,7 @@ sequenceDiagram
 
 Defined in `lib/schema.sql` (`CREATE ... IF NOT EXISTS`, applied on every open; change it, then `npm run reset`; there are no migrations).
 
-**Identity**: `users` (role `fan|admin`, status `active|blocked|deleted`), `sessions` (token PK; `user_id` NULL = guest; indexed on `user_id`), `codes` (verify, reset, otp, vf; single-use via `used_at`), `oauth_links` (schema only).
+**Identity**: `users` (role `fan|admin`, status `active|blocked|deleted`), `sessions` (token PK; `user_id` NULL = guest; indexed on `user_id`), `codes` (verify, reset, otp, vf; single-use via `used_at`), `oauth_links` (`(provider, subject)` UNIQUE; subject is the email in the mock IdP). `codes.attempts` counts wrong OTP guesses.
 
 **Places and people**: `cities` (tax rate in bps), `orgs` (`pending|approved|suspended`), `org_members` (PK `(org_id, user_id)`, roles owner, manager, box_office, scanner, finance), `venues` (org-owned, `tz`), `sections` (`reserved|ga`, SVG path), `seats` (UNIQUE `(section_id,row,number)`; accessible, companion, obstructed flags), `artists`, `artist_related`.
 
@@ -81,7 +83,7 @@ Defined in `lib/schema.sql` (`CREATE ... IF NOT EXISTS`, applied on every open; 
 
 **Inventory and holds**: one `inventory` row per sellable unit. A reserved seat is one row (`seat_id` set); a GA area is one row per capacity slot (`seat_id` NULL, `slot` set). Status `available|held|sold|blocked`, `block_kind`, `hold_id`, `held_until`, `window_id` (presale window the unit is held back for). UNIQUE `(event_id, seat_id)` and `(event_id, section_id, slot)`. `holds` has `session_token`, `status active|converted|released` and `options` (JSON checkout choices: promo code, offer per inventory id, add-on quantities). `inventory.locked_cents` is the unit face price fixed when the row was held.
 
-**Orders and tickets**: `orders` (`hold_id` is UNIQUE: one order per hold; `idempotency_key` UNIQUE; `access_token` for guest links; `refund_error`), `order_items` (kind `ticket|addon|protection|giftcard|fee|discount`; the per-order fee is its own `fee` row, a promo is a negative `discount` row, add-ons one row per unit, so item sums equal the total), `tickets` (status `valid|used|transferred|listed|resold|cancelled|expired`, per-ticket `secret`; either `inventory_id` for a seat or `addon_id` for an add-on pass, enforced by a CHECK), `payments` (kind charge/refund/payout, `idempotency_key` UNIQUE, `meta` JSON with contact and billing, never card number or CVC), `saved_cards` (brand, last4, exp, fake token).
+**Orders and tickets**: `orders` (`hold_id` is UNIQUE: one order per hold; `idempotency_key` UNIQUE; `access_token` for guest links; `refund_error`; `review_reason`, `fraud_score`; `source` is `comp` or `exchange` for staff-made and exchange orders), `order_items` (kind `ticket|addon|protection|giftcard|fee|discount`; the per-order fee is its own `fee` row, a promo is a negative `discount` row, add-ons one row per unit, so item sums equal the total), `tickets` (status `valid|used|transferred|listed|resold|cancelled|expired`, per-ticket `secret`; either `inventory_id` for a seat or `addon_id` for an add-on pass, enforced by a CHECK), `payments` (kind charge/refund/payout; method card, saved, applepay, googlepay, paypal, installments, exchange; `idempotency_key` UNIQUE; `parent_id` on a refund points at its charge; `due_at` on a pending installment; `meta` JSON with contact and billing, never card number or CVC), `claims` (protection claims), `exchanges`. `order_items.refunded_cents` marks an item refunded on its own, `saved_cards` (brand, last4, exp, fake token).
 
 Key constraint: `one_live_ticket` is `UNIQUE ON tickets(inventory_id) WHERE status IN ('valid','listed','used')`. Even if application logic failed, two live tickets cannot exist for one seat. Add-on passes have a NULL `inventory_id`, which a unique index ignores, so any number of passes can exist.
 
@@ -161,6 +163,45 @@ Resale holds reserve the *listing*, not inventory: `holdListing` runs one condit
 
 A resold ticket exists on two orders (the original buyer's and the new buyer's) and both are refunded in full. To keep money zero-sum, the seller's resale credit is reversed once per listing: a `ledger` row `resale_credit` with `-price_cents` and `ref = 'listing:ID:reversal'`, guarded by a lookup on that ref. Net effect on the seller's ledger balance after cancellation is zero. Holders other than the buyer (transfer recipients, resale buyers) get an in-app notification.
 
+### Order statuses
+
+`orders.status`: `paid` (normal), `review` (held: fraud score, organizer hold or failed installment; `review_reason` says which), `partially_refunded` (some items refunded, live tickets remain), `refunded` (everything refundable returned, tickets cancelled), `cancelled` (voided, or a refund the card refused: `refund_error` is set and admin retries), `pending` (unused). In `review` the tickets stay `valid` in their own table but `scanTicket`, `assertTradable` (transfers and listings) and the ticket page refuse them; `holdOrder` also cancels listings and pending transfers. Ticket limits count `paid`, `review` and `partially_refunded` orders.
+
+### Payment methods
+
+All methods end in `payments` rows and the same `createOrder`. Card and saved card: validated in the `pay` action, outcome keyed on last4. Apple Pay / Google Pay: client-side `PaymentRequest` or a mock confirm dialog; the server records the test Visa 4242 and never receives a wallet token. PayPal: `recordCharge` stores a `pending` row with no card, the shopper approves on `/checkout/paypal/<key>` (the key only resolves for the session that owns the payment), approval runs `approve3ds`. Pay in 4: the first row is charged at checkout with `meta.total` holding the full price (so `createOrder` checks the whole total, not the quarter), `addInstallments` adds three `pending` rows; `chargeDueInstallments` claims each with `WHERE status = 'pending'`. A failed installment puts the order in `review` (see CHANGELOG for the policy). Off-session charges (`offSession`) treat the 3DS card as declined.
+
+### Refund model
+
+`doRefund` in `lib/orders.ts` is the only place that decides what a refund returns and what it cancels; `payments.refundMoney` is the only place that writes refund rows.
+
+```mermaid
+flowchart LR
+  A[refundEvent / claim / rescheduled button / fraud cancel / admin and organizer tools] --> B[doRefund]
+  B -->|amount = min of wanted and paid minus refunded| C[payments.refundMoney]
+  C -->|per charge: at most charge minus its refunds| D[payments.refund row with parent_id]
+  B --> E[kill tickets: cancel listing and transfer, ticket cancelled, seat available if release]
+  B --> F[order status + refund_error]
+```
+
+- **What is wanted**: everything left (paid minus refunded, optionally minus the protection premium), or the chosen order items (`unit - promo share (+ fee + tax)`; `allocate()` splits the promo over the ticket items exactly as `quote()` did), or nothing (void).
+- **Caps**: `refundMoney` and `refund` throw if asked for more than paid minus refunded (per order and per charge); an item with `refunded_cents > 0` cannot be refunded again; an item refund requires a live ticket (`valid` or `listed`). Used, resold and cancelled tickets can only go with a full refund.
+- **Seats**: released (`available`) for partial refunds, voids, fraud cancels, rescheduled-window refunds and admin/organizer cancels; kept `sold` for event cancellation (the event is closed) and protection claims. Add-on units follow the same flag.
+- **Gateway failure**: `record: true` (event cancel) keeps the order `cancelled` with `refund_error` for the admin retry; everything else is strict: the UserError rolls the whole tx back, tickets included.
+- **Resale**: the seller's credit reversal stays in `refundEvent` (both orders of a resold ticket are refunded only on cancellation); item refunds of a resold ticket are refused because the seller's order no longer has a live ticket.
+
+### Ticket protection
+
+`settings.protection_pct` (default 8) of the ticket face after the promo, chosen with a checkbox stored in `holds.options.protection`. It is an `order_items` row (`protection`) and `orders.protection`, outside `subtotal`, **untaxed and without fees**, so `sum(items) == total` holds. One claim per order (partial unique index). Approval refunds everything except the premium through `doRefund` and keeps the seats sold, like an event cancellation.
+
+### Exchange
+
+A ticket can move to another date of the same `series_key`. The new seat is held first (normal hold path), then `completeExchange` runs one tx: new order for the new event (`source = 'exchange'`, one ticket item at the held seat's price with its own fee and tax, no order fee), old ticket cancelled and its seat freed, old item marked refunded. Money: `refundMoney(oldOrder, credit, 'exchange', newOrder)` writes an `exchange` refund row on the old order and an `exchange` charge row on the new one (carrying brand and last4), so both orders balance without cash moving; the difference is a real charge on the stored card (`chargeStored`) or a real refund of the old order. Declines and refused refunds roll everything back, including the new ticket.
+
+### Two-factor login
+
+`users.twofa_enabled` is switched in `/account/security` with the password. After the password step `loginAction` calls `sendOtp` (code row in `codes`, SMS in the outbox) and redirects to `/login/otp?p=<token>`; the token is an HMAC over (session, user, expiry) (`mac` from `lib/defense.ts`), so it only works in the browser session that passed the password check. `verifyOtp` takes the newest unused, unexpired code, counts wrong guesses in `codes.attempts` (5 kills the code), and consumes it with a conditional UPDATE. `devOtp()` is true only when `NODE_ENV=development` **and** `DEV_OTP=1`; then every code is `000000`. Social login and password reset do not use the OTP step.
+
 ### Idempotency
 
 Payments: client sends a form key (`[\w-]{8,64}`) generated per page render; `payments.idempotency_key` and `orders.idempotency_key` are UNIQUE. Double-submits return the first result and never charge twice; a declined attempt needs a new key. Other idempotent writes: `generateInventory` (`INSERT OR IGNORE`), `runJobs`, `refundEvent`, the lottery (claimed by setting `lottery_at` with a guarded UPDATE), waitlist promotion (`promoted_at`), and the single-use update patterns for verify/reset codes (`UPDATE ... WHERE used_at IS NULL RETURNING`).
@@ -183,6 +224,7 @@ A parking or hospitality unit is an `order_items` row of kind `addon` plus a `ti
 - **Login** issues a fresh token (no fixation) and deletes the old one. In one transaction it carries the guest session's in-flight rows to the new token: active holds (and sets their `user_id`), 3DS payments, guest orders, waiting-room place, and presale unlocks. Logging in mid-checkout does not lose the hold or the queue position.
 - **Passwords**: scrypt with 16-byte salt, constant-time compare with a length check. Login failure message is identical for unknown email, wrong password, blocked and rate-limited. Reset flow returns the same response whether or not the account exists, limits to one code per minute, invalidates older codes, consumes the code atomically and signs the user out everywhere.
 - **Order and ticket access (no sequential-id IDOR)**: `canViewOrder`: user orders are visible to their owner; guest orders to the buying session token or the emailed `?t=` access token (constant-time compares). A ticket is visible to its current `owner_id`, or via the order rules if it is a guest ticket. Holds and payments are always matched by session token, never by a client-supplied id alone.
+- **Order tools**: refund, void, hold, move seats and comps are server actions that load the order first and check the actor against the org of the order's event (`authOrder`); admins use `/admin/orders` and the review queue.
 - **Platform admin**: `users.role = 'admin'`, checked by `requireAdmin()` in every admin action and page. State-changing admin actions write `audit_log`.
 - **Org scoping**: org roles live in `org_members`. The org used for an authorization check is **always read from the target row** (event, venue), never from the URL or form: `loadEvent` returns 404 when the URL's `orgId` is not the event's real org, then `requireOrgRole(event.org_id, roles)`; server actions look the event/venue up by id and check against that row's `org_id`. `/api/scan` authorizes against the org that owns the event. `MANAGE_ROLES` = owner, manager; `SCAN_ROLES` adds box_office and scanner. New orgs are `pending` and cannot publish until an admin approves; with the `require_event_approval` flag new events stay hidden (`approved = 0`) until approved. Removing the last owner is rejected.
 - **Redirect safety**: `next` must match `^/(?![/\\])`; the city redirect uses the referer only if the host matches.
@@ -197,12 +239,13 @@ A parking or hospitality unit is an `order_items` row of kind `addon` plus a `ti
 
 ## Background jobs
 
-`runJobs()` (called by `npm run jobs` and, throttled to once per 30 seconds, by the root layout): in one transaction delete expired sessions and codes, return expired held inventory to `available` and mark expired holds `released`, drop old rate-limit rows and long-expired queue entries, release ended presale windows, record `last_jobs_run`. Then run the Verified Fan lottery and waitlist promotion (each in its own transaction, each idempotent). Correctness never depends on jobs because expiry is lazy.
+`runJobs()` (called by `npm run jobs` and, throttled to once per 30 seconds, by the root layout): in one transaction delete expired sessions and codes, return expired held inventory to `available` and mark expired holds `released`, drop old rate-limit rows and long-expired queue entries, release ended presale windows, record `last_jobs_run`. Then run the Verified Fan lottery and waitlist promotion (each in its own transaction, each idempotent) and `chargeDueInstallments()` (pay in 4: one claimed row per transaction). Correctness never depends on jobs because expiry is lazy.
 
 ## Simulated external systems
 
 - Email and SMS: `lib/notify.ts` writes to `outbox` and logs to the console; `/dev/outbox` lists the newest 200 and linkifies URLs; it is hidden when `NODE_ENV=production`.
 - In-app notifications (push stand-in): `notifications` rows via `notify()`; no UI yet.
+- Social login: `/auth/mock/[provider]` is a fake consent screen (404 in production). SMS 2FA codes and order texts go to the outbox.
 - Payments: `lib/payments.ts`, behaviour keyed on last4. Card numbers and CVCs exist only in the request that carries them. Refunds are rows in `payments` with kind `refund`.
 - Camera scanning uses `BarcodeDetector` with a paste fallback. No OAuth, wallet, NFC or payouts.
 
@@ -212,7 +255,7 @@ A parking or hospitality unit is an `order_items` row of kind `addon` plus a `ti
 
 - **Concurrency is tested with real separate connections**: `tests/holds.worker.ts`, `scan.worker.ts` and `resale.worker.ts` run in `worker_threads`, each opening its own connection to the same file. Tests assert no double holds across 8 workers x 200 iterations with all-or-nothing batches, exactly one winner when 8 connections scan the same ticket, and exactly one buyer when two connections buy the same listing.
 - Pure logic with injectable time: pricing math, Luhn and test cards, SafeTix windows, queue admission (fake clock), captcha single-use, rate limiting.
-- Flow tests against a real schema: payments (idempotency, declines keep the hold, 3DS, expired or foreign hold creates nothing, `one_live_ticket`), order authorization, organizer rules (publish gating, killed rows, doors/on-sale validation), refunds (idempotent, failed refund flagged), reschedule, transfers (old QR dies), resale (ledger credited, own-listing refused, cancel-after-resale reverses credit once), presale and Verified Fan.
+- Flow tests against a real schema (P9: shared refund caps and partial/void/event refunds, exchange both directions and twice in a row, declined difference, pay in 4 plan and job idempotency, OTP, fraud review gating, protection claims, move seat, comps, social state, account export/delete): payments (idempotency, declines keep the hold, 3DS, expired or foreign hold creates nothing, `one_live_ticket`), order authorization, organizer rules (publish gating, killed rows, doors/on-sale validation), refunds (idempotent, failed refund flagged), reschedule, transfers (old QR dies), resale (ledger credited, own-listing refused, cancel-after-resale reverses credit once), presale and Verified Fan.
 - Not covered by automated tests: React components, page rendering, route handlers' HTTP layer, the browser-side QR computation.
 
 ## Known limitations and deferrals
@@ -228,8 +271,8 @@ Other known gaps:
 
 - Add-ons carry no service or facility fee (parking is also untaxed). Offers are not locked at hold time. The seat map shows dynamic prices as of page load. Queue-depth demand (`j`) is the people waiting (joined or polled in the last 2 minutes) divided by 100, a fixed constant.
 - No seller fee, payouts, or per-event transfer/resale rules (P11). Ticket status `expired` and transfer expiry are checked lazily but no job sets them.
-- No 2FA, social login, account pages, protection, partial refunds or exchanges (P9). `oauth_links` and `codes.kind = 'otp'` are schema only.
-- Notifications have no inbox page; email/SMS are outbox-only.
+- P9 deferrals (`ponytail:` in code): a failed installment is not retried automatically; an item refund on a pay-in-4 order is capped at what was paid; exchange refuses promo, bundle and installment orders; the 2FA phone number is not verified when 2FA is turned on; wallet payments are simulated (no token); the mock IdP trusts whatever identity is typed (disabled in production).
+- Notifications have no inbox page; email/SMS are outbox-only. Notification preferences are stored (`users.notif_prefs`) but nothing reads them yet (P10).
 - Single process, single SQLite file; `place()` serializes all writers on the database lock.
 - Dev database is disposable: schema changes require `npm run reset`.
 - Guests are limited only per hold (the per-account limit needs a user id).
