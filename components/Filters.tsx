@@ -13,7 +13,7 @@ export default function Filters({ f, cities, genres, venues, allIn, canDistance 
         {CATEGORIES.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
       </select>
       <select name="city" defaultValue={f.city ?? ''} aria-label="City">
-        <option value="">Any city</option>
+        <option value="">All locations</option>
         {cities.map((c) => <option key={c.id} value={c.id}>{c.name}, {c.state}</option>)}
       </select>
       <input name="radius" type="number" min="1" max="20000" defaultValue={f.radius} placeholder="Radius" aria-label="Radius" />

@@ -1,5 +1,5 @@
 import { db } from './db.ts'
-import { CATEGORIES, eventsByIds, listEvents } from './events.ts'
+import { CATEGORIES, eventsByIds, listEvents, trendingEvents } from './events.ts'
 import type { EventRow } from './events.ts'
 
 export const PER_PAGE = 20
@@ -14,7 +14,11 @@ export function pageMath(total: number, rawPage: unknown, per = PER_PAGE) {
 }
 
 // The most popular upcoming event of each category.
-export function topPicks(limit = 6): EventRow[] {
+export function topPicks(limit = 6, cityId?: number): EventRow[] {
+  if (cityId) {
+    const seen = new Set<string>()
+    return trendingEvents(1e6, cityId).filter((e) => !seen.has(e.category) && seen.add(e.category)).slice(0, limit)
+  }
   const best = db
     .prepare(
       `SELECT id FROM events e WHERE e.status = 'published' AND e.approved = 1 AND e.starts_at > ? AND (e.onsale_at IS NULL OR e.onsale_at <= ?)

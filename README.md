@@ -151,7 +151,7 @@ Checkout also asks a math question (single-use captcha) and has a hidden honeypo
 ## Features implemented (P1 to P12B, everything in the plan)
 
 - **Accounts**: signup, login, logout, email verification, password reset (links in the dev outbox), scrypt hashing, cookie sessions, lazy guest sessions that survive login, `?next=` redirects.
-- **Discovery**: home (trending, near you), search with category, genre, city + radius, date range and quick "today / weekend / month" filters (venue-local dates), accessible-seating filter, suggest endpoint, category pages, event pages with lineup, venue info, status badges (On sale, Upcoming, Sold out, Cancelled, Postponed, Rescheduled, Ended).
+- **Discovery**: home (trending, near you), a header city picker that scopes the home rails, search and category pages to events within 100 miles (choose "All locations" for national results), search with category, genre, city + radius, date range and quick "today / weekend / month" filters (venue-local dates), accessible-seating filter, suggest endpoint, category pages, event pages with lineup, venue info, status badges (On sale, Upcoming, Sold out, Cancelled, Postponed, Rescheduled, Ended).
 - **Seat selection and holds**: SVG seat map (zoom, pan, keyboard access), reserved seats, general admission areas, best available, accessible seats, per-hold countdown, polling availability, bundle levels, per-account ticket limit.
 - **Checkout and orders**: fake card gateway, saved cards, 3DS, declines that keep the hold, idempotent payments, fees and city tax, guest checkout with emailed order links, order and ticket pages.
 - **Mobile tickets (SafeTix-style)**: QR that rotates every 15 seconds, computed in the browser from a per-ticket secret.

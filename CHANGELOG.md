@@ -2,6 +2,20 @@
 
 All notable changes, newest first. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no version numbers yet; each section is a commit. Review-fix commits are grouped under their phase.
 
+## Location picker scopes discovery
+
+#### Fixed
+- **The header city picker now scopes discovery** (bug: choosing Boston or Chicago still listed New York and other cities first). Before, the `city` cookie only fed the home "Near you" rail and the distance-sort origin; the Featured hero, Top picks, Trending, Recommended/Popular picks, `/category/*` and `/search` were national, ranked by popularity. Now, when a city is chosen, every home rail only shows events within `SCOPE_MILES` (100 mi) of it, and `/search` and `/category/*` default to that city and radius. An explicit `city` URL parameter overrides it (`city=` or `city=all` means all locations). Shared helpers in `lib/events.ts`: `scopeCity`, `inScope`, `withScope`.
+- An empty rail for the chosen city now says so, with a "Show all locations" button, instead of silently showing other cities.
+- Category pages show "Near {city} · All locations"; genre links and pagination keep an explicit location choice.
+
+#### Added
+- Seed: one theatre venue with a music show and a comedy show in each city that had no events (Boston, Houston, Phoenix, Philadelphia). Appended at the end of the seed, so every existing id, slug and demo scenario is unchanged.
+- `tests/location.test.ts`: home rails and default search stay within the radius, `city` overrides work, every seeded US city has upcoming events.
+
+#### Changed
+- The search filter's empty city option reads "All locations" (was "Any city").
+
 ## P12B review fixes
 
 #### Changed

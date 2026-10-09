@@ -2,7 +2,7 @@ import { cookies } from 'next/headers'
 import EventCard from '../../components/EventCard.tsx'
 import Filters from '../../components/Filters.tsx'
 import { db } from '../../lib/db.ts'
-import { allGenres, parseFilters, searchEvents } from '../../lib/events.ts'
+import { allGenres, parseFilters, scopeCity, searchEvents, withScope } from '../../lib/events.ts'
 import { listCities } from '../../lib/geo.ts'
 import { allInOn } from '../../lib/session.ts'
 import { PER_PAGE, pageMath } from '../../lib/discover.ts'
@@ -10,10 +10,9 @@ import Pager from '../../components/Pager.tsx'
 
 export default async function Search({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams
-  const f = parseFilters(sp)
+  const ref = scopeCity((await cookies()).get('city')?.value)?.id
+  const f = withScope(parseFilters(sp), sp, ref)
   const allIn = await allInOn()
-  const cityCookie = (await cookies()).get('city')?.value ?? ''
-  const ref = /^\d+$/.test(cityCookie) ? Number(cityCookie) : undefined
   const first = searchEvents(f, PER_PAGE, { allIn, ref })
   const pg = pageMath(first.total, Array.isArray(sp.page) ? sp.page[0] : sp.page)
   const { rows, total } = pg.page === 1 ? first : searchEvents(f, PER_PAGE, { allIn, ref, offset: pg.offset })

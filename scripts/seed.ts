@@ -592,4 +592,39 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   }
 }
 
+// Appended last so every earlier id, slug and random draw stays the same: one venue per city that had none, each with a music and a comedy show
+// (fixed days and no rnd(), so the data is deterministic). Lets the location picker find local events in Boston, Houston, Phoenix and Philadelphia.
+{
+  const org = (db.prepare("SELECT id FROM orgs WHERE name = 'Storm Live'").get() as { id: number }).id
+  const info = json({ transit: 'Short walk from the nearest transit stop.', bag: 'Small bags only.', accessibility: 'Step-free entrance and accessible seating in every reserved section.', faq: [] })
+  const levels = [['General', 1, 'standard', '#3b82f6'], ['Premium', 2, 'standard', '#a855f7'], ['VIP', 4, 'vip', '#ec4899'], ['Accessible', 1, 'accessible', '#14b8a6']] as const
+  const local: [string, string, string, [string, string, string, string, number][]][] = [
+    // city, venue name, venue slug, [event slug, title, category, artist slug, days ahead]
+    ['Boston', 'Harborside Theatre', 'harborside-theatre', [['boston-neon-harbor-live', 'Neon Harbor Live in Boston', 'music', 'neon-harbor', 9], ['boston-priya-nair-improv', 'Priya Nair: Improv Night', 'comedy', 'priya-nair', 33]]],
+    ['Houston', 'Bayou City Theatre', 'bayou-city-theatre', [['houston-marlowe-quinn-live', 'Marlowe Quinn Live in Houston', 'music', 'marlowe-quinn', 12], ['houston-dana-whitfield-standup', 'Dana Whitfield: Stand-up', 'comedy', 'dana-whitfield', 40]]],
+    ['Phoenix', 'Desert Sky Theatre', 'desert-sky-theatre', [['phoenix-cora-valdez-live', 'Cora Valdez Live in Phoenix', 'music', 'cora-valdez', 15], ['phoenix-theo-brandt-standup', 'Theo Brandt: Stand-up', 'comedy', 'theo-brandt', 47]]],
+    ['Philadelphia', 'Liberty Hall Theatre', 'liberty-hall-theatre', [['philadelphia-the-velvet-static-live', 'The Velvet Static Live in Philadelphia', 'music', 'the-velvet-static', 18], ['philadelphia-priya-nair-improv', 'Priya Nair: Improv Night', 'comedy', 'priya-nair', 54]]],
+  ]
+  for (const [cityName, vname, vslug, evs] of local) {
+    const c = db.prepare('SELECT id, lat, lng FROM cities WHERE name = ?').get(cityName) as { id: number; lat: number; lng: number }
+    const tz = cities.find((x) => x[0] === cityName)![5]
+    const secs = generateVenue('theater')
+    const venue = Number(db.prepare('INSERT INTO venues (org_id, slug, name, address, city_id, lat, lng, tz, capacity, info) VALUES (?,?,?,?,?,?,?,?,?,?)').run(org, vslug, vname, '1 Main St', c.id, c.lat + 0.01, c.lng + 0.01, tz, venueCapacity(secs), info).lastInsertRowid)
+    for (const sec of secs) {
+      const sid = Number(db.prepare('INSERT INTO sections (venue_id, name, kind, capacity, path, label_x, label_y, rank) VALUES (?,?,?,?,?,?,?,?)').run(venue, sec.name, sec.kind, sec.capacity, sec.path, sec.label_x, sec.label_y, sec.rank).lastInsertRowid)
+      for (const t of sec.seats) db.prepare('INSERT INTO seats (section_id, row, number, x, y, accessible, companion, obstructed) VALUES (?,?,?,?,?,?,?,?)').run(sid, t.row, t.number, t.x, t.y, t.accessible, t.companion, t.obstructed)
+    }
+    for (const [slug, title, category, artist, days] of evs) {
+      const d = new Date(Date.now() + days * 864e5)
+      const startsAt = localToUtc(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 20, 0, tz)
+      const id = Number(
+        db.prepare("INSERT INTO events (org_id, venue_id, slug, title, category, genre, starts_at, doors_at, description, info, status, onsale_at, popularity) SELECT ?,?,?,?,?,genres->>'$[0]',?,?,?,?,'published',?,30 FROM artists WHERE slug = ?")
+          .run(org, venue, slug, title, category, startsAt, new Date(Date.parse(startsAt) - 3_600_000).toISOString(), `${title}. One night only.`, json({ age: 'All ages', bag: 'Small bags only', notices: '', set_times: [] }), new Date(Date.now() - 10 * 864e5).toISOString(), artist).lastInsertRowid)
+      db.prepare('INSERT INTO event_artists (event_id, artist_id, billing) SELECT ?, id, 0 FROM artists WHERE slug = ?').run(id, artist)
+      for (const [name, mult, type, color] of levels) db.prepare('INSERT INTO price_levels (event_id, name, color, price_cents, ticket_type) VALUES (?,?,?,?,?)').run(id, name, color, mult * 4500, type)
+      generateInventory(id)
+    }
+  }
+}
+
 console.log('Seeded: cities, venues, artists, events, users (password: password123).')

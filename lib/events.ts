@@ -182,10 +182,29 @@ export function searchEvents(f: Filters, limit = 60, opt: { allIn?: boolean; ref
   return { rows: rows.slice(opt.offset ?? 0, (opt.offset ?? 0) + limit), total: rows.length }
 }
 
-export function trendingEvents(limit: number): EventRow[] {
-  return db
-    .prepare(`${SELECT} WHERE ${VISIBLE} AND e.status = 'published' AND e.starts_at > ? ORDER BY e.popularity DESC, e.starts_at LIMIT ?`)
-    .all(new Date().toISOString(), limit) as EventRow[]
+// Location scope: the header picker's city (`city` cookie). When set, discovery only shows events within SCOPE_MILES of it; empty/unknown = national.
+export const SCOPE_MILES = 100
+
+export function scopeCity(cookie: string | undefined): { id: number; name: string; state: string } | undefined {
+  return /^\d+$/.test(cookie ?? '') ? (db.prepare('SELECT id, name, state FROM cities WHERE id = ?').get(Number(cookie)) as { id: number; name: string; state: string } | undefined) : undefined
+}
+
+// ponytail: JS haversine over the upcoming set (small), same as eventsNear; add a bounding-box SQL prefilter if the set grows.
+export function inScope<T extends { vlat: number; vlng: number }>(rows: T[], cityId: number | undefined): T[] {
+  const c = cityId ? (db.prepare('SELECT lat, lng FROM cities WHERE id = ?').get(cityId) as { lat: number; lng: number } | undefined) : undefined
+  return c ? rows.filter((r) => haversineKm(c.lat, c.lng, r.vlat, r.vlng) <= miToKm(SCOPE_MILES)) : rows
+}
+
+// /search and /category: with no `city` in the URL, default to the scope city and radius. An explicit `city=` (empty or "all") overrides.
+export function withScope(f: Filters, sp: Params, cityId: number | undefined): Filters {
+  if (!cityId || 'city' in sp) return f
+  return { ...f, city: cityId, radius: f.radius ?? (f.unit === 'km' ? Math.round(miToKm(SCOPE_MILES)) : SCOPE_MILES) }
+}
+
+export function trendingEvents(limit: number, cityId?: number): EventRow[] {
+  const sql = `${SELECT} WHERE ${VISIBLE} AND e.status = 'published' AND e.starts_at > ? ORDER BY e.popularity DESC, e.starts_at`
+  if (cityId) return inScope(db.prepare(sql).all(new Date().toISOString()) as EventRow[], cityId).slice(0, limit)
+  return db.prepare(`${sql} LIMIT ?`).all(new Date().toISOString(), limit) as EventRow[]
 }
 
 // Upcoming events within `miles` of a city centre, soonest first.
@@ -286,7 +305,7 @@ export function score(c: Cand, p: Profile): number {
 }
 
 // Events for the home-page rail. Guests (userId null) have no history, so it falls back to popularity + distance from `cityId`.
-export function recommendedEvents(userId: number | null, cityId: number | undefined, limit: number): EventRow[] {
+export function recommendedEvents(userId: number | null, cityId: number | undefined, limit: number, scope?: number): EventRow[] {
   const genres = new Map<string, number>()
   const artists = new Set<number>()
   const owned = new Set<number>()
@@ -311,7 +330,7 @@ export function recommendedEvents(userId: number | null, cityId: number | undefi
   const cands = db
     .prepare(`${COLS}, (SELECT group_concat(artist_id) FROM event_artists WHERE event_id = e.id) AS aids ${FROM} WHERE ${VISIBLE} AND e.status = 'published' AND e.starts_at > ?`)
     .all(new Date().toISOString()) as (EventRow & { aids: string | null })[]
-  return cands
+  return inScope(cands, scope)
     .filter((e) => !owned.has(e.id))
     .map((e) => ({ e, s: score({ genre: e.genre, popularity: e.popularity, artistIds: e.aids ? e.aids.split(',').map(Number) : [], vlat: e.vlat, vlng: e.vlng }, profile) }))
     .sort((a, b) => b.s - a.s || a.e.starts_at.localeCompare(b.e.starts_at))
