@@ -531,7 +531,7 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
 }
 
 // P12B (money): a $25 gift card from fan2@ to fan@ (the code is in /dev/outbox), $20 of account credit for fan2@ (a redeemed gift card), and an order paid with
-// the 0341 test card on the Wednesday show: the bank disputes it, /admin/disputes lists it as open.
+// the 0259 test card on the Wednesday show: the bank disputes it, /admin/disputes lists it as open.
 {
   const uid = (email: string) => (db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: number }).id
   const card = { number: '4242424242424242', exp: '12/39', cvc: '123' }
@@ -542,7 +542,7 @@ db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('protection_pct'
   const wed = db.prepare("SELECT id FROM events WHERE slug = 'neon-harbor-empire-wednesday'").get() as { id: number }
   const owner = { sessionToken: 'seed-dispute-session', userId: uid('fan2@ticketstorm.test') }
   const held = holdBestAvailable(wed.id, owner, 1)
-  finalize({ holdId: held.holdId, sessionToken: owner.sessionToken, userId: owner.userId, email: 'fan2@ticketstorm.test', key: 'seed-dispute-order', method: 'card', brand: 'Visa', last4: '0341', exp: '12/39', save: false, billing: { name: 'Fiona Fan', address: '2 Main St', city: 'New York', zip: '10001' } })
+  finalize({ holdId: held.holdId, sessionToken: owner.sessionToken, userId: owner.userId, email: 'fan2@ticketstorm.test', key: 'seed-dispute-order', method: 'card', brand: 'Visa', last4: '0259', exp: '12/39', save: false, billing: { name: 'Fiona Fan', address: '2 Main St', city: 'New York', zip: '10001' } })
 }
 
 // P12B (content): more add-on kinds (VIP upgrade, food pre-order, camping, shuttle), a team page with season tickets, artist music/social links,

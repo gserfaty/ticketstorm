@@ -33,7 +33,7 @@ export async function checkBalance(f: FormData) {
   const user = await getUser()
   if (!allowed('giftcheck', clientIp(await headers()), user?.id ?? null, 10)) go('error', 'Too many attempts, wait a minute')
   const g = findGift(field(f, 'code'))
-  if (!g) go('error', 'That gift card code is not valid')
+  if (!g || g.balance <= 0) go('error', 'That gift card code is not valid')
   go('notice', `Gift card ending ${g!.last4} has ${money(g!.balance)} left.`)
 }
 

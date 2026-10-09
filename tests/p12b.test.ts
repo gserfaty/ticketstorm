@@ -235,7 +235,7 @@ test('account credit: spending is atomic and never exceeds the balance; refund a
 test('chargeback lost: the order is refunded by a forced payment, tickets die, ledger stays zero-sum (before and after settlement)', () => {
   const e3 = mkEvent('e3')
   const u = user('disputer')
-  const a = buy(e3, u, 2, { last4: '0341' })
+  const a = buy(e3, u, 2, { last4: '0259' })
   const d = get<{ id: number; status: string; amount: number }>('SELECT id, status, amount FROM disputes WHERE order_id = ?', a.orderId)
   assert.equal(d.status, 'open')
   const admin = user('admin1')
@@ -249,12 +249,12 @@ test('chargeback lost: the order is refunded by a forced payment, tickets die, l
   throwsHold(() => { try { resolveDispute(admin, d.id, 'won', '') } catch (e) { throw new inv.HoldError(String((e as Error).message), 400) } }, /already decided/)
   assert.equal(ledgerTotal(), 0)
   // won: nothing moves
-  const b = buy(e3, u, 1, { last4: '0341' })
+  const b = buy(e3, u, 1, { last4: '0259' })
   const db2 = get<{ id: number }>('SELECT id FROM disputes WHERE order_id = ?', b.orderId)
   resolveDispute(admin, db2.id, 'won', 'evidence ok')
   assert.equal(get<{ status: string }>('SELECT status FROM orders WHERE id = ?', b.orderId).status, 'paid')
   // lost AFTER settlement: reversed out of organizer / platform / tax, still zero-sum
-  const c = buy(e3, u, 1, { last4: '0341' })
+  const c = buy(e3, u, 1, { last4: '0259' })
   db.prepare('UPDATE orders SET status = status WHERE id = ?').run(c.orderId)
   db.prepare("UPDATE events SET starts_at = ? WHERE id = ?").run(new Date(Date.now() - 864e5).toISOString(), e3)
   // the open dispute on b stays paid; settle needs no orders in review

@@ -4,7 +4,7 @@ import { money } from './format.ts'
 import { refundInTx } from './orders.ts'
 import { UserError } from './platform.ts'
 
-// Opened inside createOrder for an order paid (in part) with the 0341 test card: the cardholder's bank disputes the charge.
+// Opened inside createOrder for an order paid (in part) with the 0259 test card: the cardholder's bank disputes the charge.
 export function openDispute(orderId: number, amount: number) {
   if (amount > 0) db.prepare("INSERT OR IGNORE INTO disputes (order_id, amount, reason) VALUES (?,?,'The bank reports the cardholder does not recognise this charge')").run(orderId, amount)
 }

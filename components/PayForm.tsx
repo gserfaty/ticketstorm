@@ -95,7 +95,7 @@ export default function PayForm({ action, holdId, idemKey, expiresAt, email, sav
       <p className="muted">A gift card or credit pays first; if it covers less than the total, the card below is charged only the rest.</p>
       <h2>{labels['co.payment']}</h2>
       <div className="row" role="radiogroup" aria-label="Payment method">
-        {METHODS.map(([k, name]) => <label key={k}><input type="radio" checked={method === k} onChange={() => setMethod(k)} /> {name}</label>)}
+        {METHODS.map(([k, name]) => <label key={k}><input type="radio" name="method" value={k} checked={method === k} onChange={() => setMethod(k)} /> {name}</label>)}
       </div>
       {method === 'card' && (
         <>

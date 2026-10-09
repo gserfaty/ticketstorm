@@ -5,7 +5,7 @@ import { mac } from './defense.ts'
 // Fake gateway. Card numbers and CVCs exist only inside the request that carries them: never stored, never logged.
 // Only brand + last4 are kept. Behaviour is keyed on last4 (the published test cards).
 // The published test numbers. Outside production they get NO scalper fingerprint: every developer pays with 4242..., so it would flag any three demo accounts.
-const TEST_NUMBERS = ['4242424242424242', '4000000000000002', '4000000000009995', '4000000000003220', '4000000000000341']
+const TEST_NUMBERS = ['4242424242424242', '4000000000000002', '4000000000009995', '4000000000003220', '4000000000000341', '4000000000000259']
 export function cardFingerprint(number: string): string | undefined {
   if (process.env.NODE_ENV !== 'production' && TEST_NUMBERS.includes(number)) return undefined
   return mac(`card:${number}`).toString('hex').slice(0, 32)

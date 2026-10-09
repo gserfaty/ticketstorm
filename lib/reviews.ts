@@ -30,8 +30,8 @@ export function decideReview(adminId: number, id: number, approve: boolean) {
 
 export type PublicReview = { rating: number; body: string; created_at: string }
 // Approved reviews only; no author identity beyond "verified attendee".
-export function approvedReviews(kind: Target, refId: number): { list: PublicReview[]; avg: number | null } {
+export function approvedReviews(kind: Target, refId: number): { list: PublicReview[]; avg: number | null; count: number } {
   const list = db.prepare(`SELECT rating, body, created_at FROM reviews WHERE ${kind}_id = ? AND status = 'approved' ORDER BY id DESC LIMIT 20`).all(refId).map((r) => ({ ...r })) as PublicReview[]
-  const a = db.prepare(`SELECT avg(rating) AS a FROM reviews WHERE ${kind}_id = ? AND status = 'approved'`).get(refId) as { a: number | null }
-  return { list, avg: a.a }
+  const a = db.prepare(`SELECT avg(rating) AS a, count(*) AS n FROM reviews WHERE ${kind}_id = ? AND status = 'approved'`).get(refId) as { a: number | null; n: number }
+  return { list, avg: a.a, count: a.n }
 }

@@ -155,7 +155,7 @@ export function customersCsv(orgId: number): { csv: string; rows: number } {
   const rows = db
     .prepare(
       `SELECT o.email, coalesce(max(u.name), '') AS name, count(*) AS orders, coalesce(sum((SELECT count(*) FROM order_items WHERE order_id = o.id AND kind = 'ticket')), 0) AS tickets,
-         sum(o.total) AS spent, min(o.created_at) AS first_order, max(o.created_at) AS last_order
+         sum(o.total) - coalesce(sum((SELECT coalesce(sum(amount), 0) FROM payments WHERE order_id = o.id AND kind = 'refund' AND status = 'succeeded' AND method != 'exchange')), 0) AS spent, min(o.created_at) AS first_order, max(o.created_at) AS last_order
        FROM orders o JOIN events e ON e.id = o.event_id LEFT JOIN users u ON u.id = o.user_id
        WHERE e.org_id = ? AND ${CHARGED} AND o.status IN ('paid','partially_refunded') GROUP BY o.email ORDER BY o.email`,
     )

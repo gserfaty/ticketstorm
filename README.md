@@ -120,7 +120,7 @@ Enter a code, pick child (50 percent), senior (25) or student (20) per ticket, a
 
 - **Offers**: log in as `fan2@` > `/seller`: `fan@` has offered $100 on the $125 listing. Accept it (reserved for `fan@` for 30 minutes at $100), then as `fan@` open `/seller` > "Check out at $100.00". Make your own offer from a listing on an event's tickets page. `/sell` shows a suggested price and notes that third-party resale is not integrated. `/claims` shows protection claim status.
 - **Gift cards and credit**: `fan@` has a $25 gift card from `fan2@` (code in `/dev/outbox`); `fan2@` has $20 account credit (`/account/payment`). Pay with a gift card code and a card on checkout: the card is charged only the rest. Buy cards, check balances and redeem to credit at `/gift-cards`. Refund as account credit from the organizer or admin order tools. Cards: `4242...` succeeds; a gift card or credit that covers the whole total needs no card.
-- **Chargebacks**: `/admin/disputes` lists a dispute on a `fan2@` order paid with the 0341 card. "Lost" refunds the bank and cancels the tickets; "Won" leaves everything.
+- **Chargebacks**: `/admin/disputes` lists a dispute on a `fan2@` order paid with the 0259 card. "Lost" refunds the bank and cancels the tickets; "Won" leaves everything.
 - **Reviews**: `fan@` attended `storm-settled-demo` (ticket scanned): that event shows an approved review; a venue review waits at `/admin/reviews`. Others cannot review.
 - **Content**: add-ons (VIP upgrade, food, shuttle) on `neon-harbor-empire-saturday`, camping on `neon-harbor-catskill-saturday`; team page `/artists/metro-thunder` (schedule, season bundle); `/venues/empire-arena` (views from the seats); `/favorites/import`; the weekly digest runs with `npm run jobs` (`fan@` opted in to email; check `/dev/outbox` and the inbox).
 - **Organizer tools** (`organizer@`, Storm Live): event page > clone and series; guest list; `/organizer/1/developers` (API keys, webhook, embed snippets, customers CSV). Demo API key (seed only): `tsk_0123456789abcdef0123456789abcdef0123456789abcdef`.
@@ -144,6 +144,7 @@ Any Luhn-valid number works with a future `MM/YY` expiry and a 3-4 digit CVC. Be
 | `4000 0000 0000 9995` | Declined (`insufficient_funds`) |
 | `4000 0000 0000 3220` | Requires 3-D Secure (approve or fail on `/checkout/3ds/<id>`) |
 | `4000 0000 0000 0341` | Charge succeeds, but refunds fail (used to test failed event-cancel refunds at `/admin/refunds`) |
+| `4000 0000 0000 0259` | Charge succeeds, then the bank disputes it: an open chargeback at `/admin/disputes` (refunds work normally) |
 
 Checkout also asks a math question (single-use captcha) and has a hidden honeypot field.
 

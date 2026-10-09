@@ -68,6 +68,9 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
   const vbRef = useRef(vb)
   vbRef.current = vb
 
+  // after "Hold N seats" keyboard focus would fall to <body>: move it to the Checkout link
+  useEffect(() => { if (hold) document.getElementById('checkout-link')?.focus() }, [hold?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const levelById = useMemo(() => new Map(levels.map((l) => [l.id, l])), [levels])
   const seatById = useMemo(() => new Map(seats.map((s) => [s[0], s])), [seats])
   const sectionById = useMemo(() => new Map(sections.map((s) => [s.id, s])), [sections])
@@ -388,7 +391,7 @@ export default function SeatMap({ eventId, ticketLimit, allIn, qty, sections, le
             {hold.ga && <li>{hold.ga.qty} × General admission {sectionById.get(hold.ga.sectionId)?.name}</li>}
             {listed.map((s) => <li key={s[0]}>{seatLabel(s)} · {usd(price(s[0]))}</li>)}
           </ul>
-          <button onClick={() => release()}>Release</button> <a className="btn" href={`/checkout/${hold.id}`}>Checkout</a>
+          <button onClick={() => release()}>Release</button> <a className="btn" id="checkout-link" href={`/checkout/${hold.id}`}>Checkout</a>
         </div>
       ) : selected.length > 0 && (
         <div className="card">

@@ -165,7 +165,7 @@ function createOrder(p: Payment): number {
   if (q.protection) db.prepare("INSERT INTO order_items (order_id, kind, unit_cents) VALUES (?, 'protection', ?)").run(order.id, q.protection)
   db.prepare('UPDATE payments SET order_id = ? WHERE id = ?').run(order.id, p.id)
   applyStored(order.id, m.userId, m.gift, m.credit ?? 0)
-  if (p.last4 === '0341') openDispute(order.id, p.amount) // the bank disputes this card's charges (test card): an admin resolves it
+  if (p.last4 === '0259') openDispute(order.id, p.amount) // test card 4000 0000 0000 0259: the bank disputes the charge, an admin resolves it (0341 only makes refunds fail)
   logEvent(hold.event_id, 'order')
   emitWebhook((db.prepare('SELECT org_id FROM events WHERE id = ?').get(hold.event_id) as { org_id: number }).org_id, 'order.created', { order_id: order.id, event_id: hold.event_id, tickets: q.lines.length, total_cents: q.total })
   db.prepare("UPDATE holds SET status = 'converted' WHERE id = ?").run(hold.id)
@@ -353,7 +353,7 @@ function doRefund(orderId: number, opts: RefundOpts): RefundResult {
   // a refunded resale order gives the seller's credit (and the fees) back; the seller's own order is refunded separately
   if (ok && status === 'refunded') reverseResale(orderId)
 
-  emitWebhook((db.prepare('SELECT org_id FROM events WHERE id = ?').get(o.event_id) as { org_id: number }).org_id, 'order.refunded', { order_id: orderId, event_id: o.event_id, amount_cents: amount, status })
+  if (ok && amount > 0) emitWebhook((db.prepare('SELECT org_id FROM events WHERE id = ?').get(o.event_id) as { org_id: number }).org_id, 'order.refunded', { order_id: orderId, event_id: o.event_id, amount_cents: amount, status })
   if (!opts.quiet) {
     const what = opts.refund === false ? `Order #${orderId} was cancelled.` : ok ? `We refunded ${money(amount)} for order #${orderId}.` : `Your refund of ${money(amount)} for order #${orderId} could not be completed yet; we will retry.`
     sendEmail(o.email, `Order #${orderId} update`, `${what}\n${APP_URL}/orders/${orderId}${o.user_id ? '' : `?t=${o.access_token}`}`)
