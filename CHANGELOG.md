@@ -2,6 +2,18 @@
 
 All notable changes, newest first. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no version numbers yet; each section is a commit. Review-fix commits are grouped under their phase.
 
+## P12B review fixes
+
+#### Changed
+- **Disputes have their own test card**: `4000 0000 0000 0259` charges fine and opens a chargeback (`/admin/disputes`); refunds on it work normally. `0341` is back to "refunds fail" only. The seed's dispute order uses 0259; README test-card table updated; the chargeback tests use 0259.
+- **Keyboard**: after "Hold N seats" focus moves to the Checkout link instead of falling to the page body.
+- **Gift card balance check** answers an empty card with the same "not valid" message as a wrong code (no "$0.00 left").
+- **`order.refunded` webhook** is emitted only when a refund actually moved money (`ok && amount > 0`), not for voids or failed refunds.
+- **Reviews header** shows the true number of approved reviews (a `count(*)`), not the 20 displayed.
+- **Customer CSV** `spent_cents` is net of succeeded refunds.
+- Payment-method radios carry `name="method"` and a value (the hidden field still decides).
+- Removed scratch files from `data/`.
+
 ## P12B: nice-to-have sweep, features 12 to 22 (final phase)
 
 Verified, not rebuilt: the resale policy UI (organizer event page: floor, ceiling, fees, on/off, platform defaults at `/admin/fees`), the hearing assistance / ASL interpreter / sensory-friendly request types on `/support/ada` (`ADA_KINDS`), and artist music/social links (stored in `artists.links`, now headed "Music and social", http(s) only, `nofollow`).
