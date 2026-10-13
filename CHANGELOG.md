@@ -5,7 +5,7 @@ All notable changes, newest first. Format follows [Keep a Changelog](https://kee
 ## Redesign research brief
 
 #### Added
-- `.design-foundations/research/2026-10-13-ticketstorm-redesign.md`: design brief for the UI/UX redesign. It calls for a clean, bright, Airbnb-like green/white look with a vivid lime/mint accent that stays readable, phone-first design for fans, and denser desktop-first organizer and admin pages. Real events, venues and artists come from the Ticketmaster Discovery API in a hybrid model: real events link out to Ticketmaster to buy, and organizer-created events keep the TicketStorm selling stack.
+- Design research for the UI/UX redesign (clean, bright, Airbnb-like green/white with a readable lime/mint accent, phone-first; real Ticketmaster events in a hybrid model where real events link out to Ticketmaster). Design-planning files live in `.design-foundations/`, which is gitignored and kept local.
 - `.gitignore` now ignores `.env*.local`, where `TICKETMASTER_API_KEY` will live.
 - `.github/CODEOWNERS` and `CONTRIBUTING.md`. The repository is now public, and `main` requires a pull request approved by the code owner.
 
