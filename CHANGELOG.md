@@ -6,7 +6,7 @@ All notable changes, newest first. Format follows [Keep a Changelog](https://kee
 
 #### Added
 - `LICENSE` (MIT), `"license": "MIT"` in package.json, and a README "License and disclaimer" section: a personal, non-commercial portfolio project, not affiliated with Ticketmaster, Live Nation or AXS.
-- Design research for the UI/UX redesign (clean, bright, Airbnb-like green/white with a readable lime/mint accent, phone-first; real Ticketmaster events in a hybrid model where real events link out to Ticketmaster). Design-planning files live in `.design-foundations/`, which is gitignored and kept local.
+- Design research for the UI/UX redesign (clean, bright, Airbnb-like green/white with a readable lime/mint accent, phone-first; real Ticketmaster events in a hybrid model where real events link out to Ticketmaster). Design-planning files live in `.design-foundations/`, which is gitignored and kept local, as are the design artifacts `DESIGN.md` and `JOURNEY.md`.
 - `.gitignore` now ignores `.env*.local`, where `TICKETMASTER_API_KEY` will live.
 - `.github/CODEOWNERS` and `CONTRIBUTING.md`. The repository is now public, and `main` requires a pull request approved by the code owner.
 

@@ -9,3 +9,5 @@ data/
 .DS_Store
 .env*.local
 .design-foundations/
+DESIGN.md
+JOURNEY.md
