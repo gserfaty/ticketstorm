@@ -1,6 +1,7 @@
 {
   "name": "ticketstorm",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=23.6"

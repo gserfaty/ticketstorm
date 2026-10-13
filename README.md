@@ -188,3 +188,7 @@ Checkout also asks a math question (single-use captcha) and has a hidden honeypo
 - [CHANGELOG.md](CHANGELOG.md)
 - [docs/plan.md](docs/plan.md)
 - [docs/research.md](docs/research.md)
+
+## License and disclaimer
+
+TicketStorm is a personal, non-commercial portfolio project, released under the [MIT License](LICENSE). It is not affiliated with, endorsed by, or connected to Ticketmaster, Live Nation or AXS. Their names are used only to describe what the project imitates.
