@@ -2,6 +2,12 @@
 
 All notable changes, newest first. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no version numbers yet; each section is a commit. Review-fix commits are grouped under their phase.
 
+## Redesign research brief
+
+#### Added
+- `.design-foundations/research/2026-10-13-ticketstorm-redesign.md`: design brief for the UI/UX redesign. It calls for a clean, bright, Airbnb-like green/white look with a vivid lime/mint accent that stays readable, phone-first design for fans, and denser desktop-first organizer and admin pages. Real events, venues and artists come from the Ticketmaster Discovery API in a hybrid model: real events link out to Ticketmaster to buy, and organizer-created events keep the TicketStorm selling stack.
+- `.github/CODEOWNERS` and `CONTRIBUTING.md`. The repository is now public, and `main` requires a pull request approved by the code owner.
+
 ## Location picker scopes discovery
 
 #### Fixed
